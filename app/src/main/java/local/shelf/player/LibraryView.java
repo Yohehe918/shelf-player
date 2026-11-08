@@ -24,11 +24,13 @@ final class LibraryView {
     private static final int DIM = 0xffb8b9bc;
     private static final int ORANGE = 0xffff8916;
     private final Activity context;
+    private final java.util.function.Function<Catalog.Movie,String> displayName;
     private final LinearLayout column;
     private final FrameLayout frame;
     private final ScrollView scroll;
 
-    LibraryView(Activity context) {
+    LibraryView(Activity context,java.util.function.Function<Catalog.Movie,String> displayName) {
+        this.displayName=displayName;
         this.context = context;
         frame = new FrameLayout(context);
         frame.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
@@ -37,6 +39,8 @@ final class LibraryView {
         scroll.setClipChildren(false);
         scroll.setClipToPadding(false);
         scroll.setVerticalScrollBarEnabled(false);
+        scroll.setSmoothScrollingEnabled(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         frame.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
         column = vertical();
         column.setClipChildren(false);
@@ -108,6 +112,7 @@ final class LibraryView {
             card.addView(text, new LinearLayout.LayoutParams(-1, dp(29)));
             Runnable action = actions.get(i);
             focus(card, tile, text, action);
+            Motion.identity(card,"collection:"+labels.get(i));
             addCard(row, card, 190, 20);
         }
     }
@@ -155,7 +160,7 @@ final class LibraryView {
         ImageView image = new ImageView(context);
         image.setScaleType(ImageView.ScaleType.CENTER_CROP);
         tile.addView(image, new FrameLayout.LayoutParams(-1, -1));
-        TextView fallback = label(movie.title().name(), 18, WHITE);
+        TextView fallback = label(displayName.apply(movie), 18, WHITE);
         fallback.setPadding(dp(10), dp(10), dp(10), dp(10));
         fallback.setGravity(Gravity.CENTER);
         fallback.setMaxLines(3);
@@ -171,7 +176,7 @@ final class LibraryView {
             tile.addView(line, lineSize);
         }
         card.addView(tile, new LinearLayout.LayoutParams(dp(width), dp(height)));
-        TextView title = label(movie.title().name(), 15, DIM);
+        TextView title = label(displayName.apply(movie), 15, DIM);
         title.setSingleLine();
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setGravity(Gravity.CENTER);
@@ -183,12 +188,13 @@ final class LibraryView {
             card.addView(sub);
         }
         focus(card, tile, title, () -> click.accept(movie));
+        Motion.identity(card,"movie:"+movie.path());
         artwork.load(movie, wide, image);
         return card;
     }
 
     void details(Catalog.Movie movie, String title, String overview, String playLabel,
-                 Runnable play, Runnable favorite, boolean isFavorite, Runnable subtitles,
+                 Runnable play, Runnable favorite, boolean isFavorite, Runnable subtitles, Runnable manage,
                  ArtLoader artwork) {
         ImageView backdrop = new ImageView(context);
         backdrop.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -221,6 +227,7 @@ final class LibraryView {
         secondary.setPadding(0, dp(17), 0, dp(9));
         secondary.addView(action(isFavorite ? "已收藏" : "收藏", favorite), new LinearLayout.LayoutParams(dp(88), dp(40)));
         secondary.addView(action("字幕", subtitles), new LinearLayout.LayoutParams(dp(88), dp(40)));
+        secondary.addView(action("更多",manage),new LinearLayout.LayoutParams(dp(88),dp(40)));
         info.addView(secondary);
         Button start = action(playLabel, play);
         start.setBackground(buttonBackground(true));
@@ -241,6 +248,8 @@ final class LibraryView {
         horizontal.setClipChildren(false);
         horizontal.setClipToPadding(false);
         horizontal.setHorizontalScrollBarEnabled(false);
+        horizontal.setSmoothScrollingEnabled(true);
+        horizontal.setOverScrollMode(View.OVER_SCROLL_NEVER);
         column.addView(horizontal);
         LinearLayout row = horizontal();
         row.setClipChildren(false);
@@ -261,14 +270,7 @@ final class LibraryView {
         card.setFocusable(true);
         card.setClickable(true);
         card.setOnClickListener(v -> action.run());
-        card.setOnFocusChangeListener((view, focused) -> {
-            float scale = focused ? 1.10f : 1f;
-            if (art.getHeight() > 0) art.setPivotY(art.getHeight());
-            art.animate().scaleX(scale).scaleY(scale).setDuration(140).start();
-            card.setTranslationZ(focused ? dp(12) : 0);
-            art.setElevation(focused ? dp(8) : 0);
-            title.setTextColor(focused ? WHITE : DIM);
-        });
+        Motion.focus(card,art,title,.065f,true);
     }
 
     private Button action(String text, Runnable action) {
@@ -279,6 +281,7 @@ final class LibraryView {
         button.setTextColor(new ColorStateList(new int[][]{{android.R.attr.state_focused}, {}},
                 new int[]{WHITE, DIM}));
         button.setBackground(buttonBackground(false));
+        Motion.focus(button,button,null,.025f,false);
         button.setOnClickListener(v -> action.run());
         return button;
     }
@@ -289,6 +292,8 @@ final class LibraryView {
                 ? new int[]{0xffee7d08, 0xffa65400} : new int[]{0xff6f7781, 0xff454951}, 9));
         states.addState(new int[]{}, gradient(primary
                 ? new int[]{0xffa85b09, 0xff75440e} : new int[]{0x26545862, 0x09545862}, 9));
+        states.setEnterFadeDuration(Motion.enabled(context)?140:0);
+        states.setExitFadeDuration(Motion.enabled(context)?180:0);
         return states;
     }
 
@@ -307,11 +312,15 @@ final class LibraryView {
     }
 
     private LinearLayout horizontal() {
-        return new LinearLayout(context);
+        LinearLayout row=new LinearLayout(context);
+        row.setClipChildren(false);row.setClipToPadding(false);
+        return row;
     }
 
     private LinearLayout vertical() {
         LinearLayout result = new LinearLayout(context);
+        result.setClipChildren(false);
+        result.setClipToPadding(false);
         result.setOrientation(LinearLayout.VERTICAL);
         return result;
     }

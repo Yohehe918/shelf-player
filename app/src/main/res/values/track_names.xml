@@ -1,0 +1,5 @@
+<resources>
+<string name="audio_menu_track">音轨 %1$d</string><string name="subtitle_menu_track">字幕 %1$d</string>
+<string name="subtitle_menu_current">当前</string><string name="unit_kilohertz">kHz</string><string name="unit_kilobits_per_second">kbps</string>
+<string name="track_forced">强制字幕</string><string name="track_hearing_impaired">听障辅助</string><string name="track_visual_impaired">口述影像</string>
+<string name="track_mono">单声道</string><string name="track_stereo">立体声</string></resources>

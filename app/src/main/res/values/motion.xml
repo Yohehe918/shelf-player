@@ -1,0 +1,9 @@
+<resources>
+    <item name="motion_identity" type="id" />
+    <item name="motion_binding" type="id" />
+    <item name="motion_host" type="id" />
+    <style name="ShelfDialogMotion">
+        <item name="android:windowEnterAnimation">@anim/shelf_dialog_enter</item>
+        <item name="android:windowExitAnimation">@anim/shelf_dialog_exit</item>
+    </style>
+</resources>

@@ -1,29 +1,64 @@
-# 片库 0.2
+# Shelf 0.4.2 — SMB 电视片库
 
-面向小米电视 S Pro 85 Mini LED 的 Android TV 播放器。以 Infuse 8 的 tvOS 版作为界面和功能参考。
+面向小米 S Pro Mini LED / HyperOS 3 的原生 Android TV 播放器。沿用 Shelf 的片库界面，整合经过审查的 NOVA、Kinema 和 Just Player Pro 代码；来源、文件、提交版本、改动和许可证见 THIRD-PARTY-NOTICES.md。
 
-## 在电视上使用
+## 0.4.2 运行效率与生命周期
 
-1. 从 CleanYourTV 底部 Dock 打开「片库」。
-2. 选「添加 SMB 共享」，填写 NAS 的地址、共享文件夹名和账号。默认端口为 445。地址也可以写成 `192.168.1.50:1445`。
-3. 打开共享后，应用会递归扫描影片，并建立电影和剧集视图。搜索、刷新、设置在首页顶部。密码用这台设备的 Android Keystore 密钥加密。
-4. 封面可用 `片名-poster.jpg`、`poster.jpg` 或 `folder.jpg`，背景图可用 `片名-fanart.jpg` 或 `fanart.jpg`。支持 JPG、PNG、WebP。给视频旁放同名的 SRT、ASS、SSA 或 VTT，例如 `Movie (2024).zh.srt`。
-5. 播放时按下方向键调出进度条及信息、视频、音频、字幕菜单。播放退出后可续播。
+同一页面及切换中重复出现的图片共享一次加载/解码；海报与背景使用独立的内存分辨率缓存，并共享磁盘原图。旧页面通过弱引用等待图片，退出时关闭数据库、清空内存缓存并停止任务；旧播放器回调不再影响新播放器。解析剧集文件夹的正则表达式只编译一次。
 
-## 在线匹配
+`launcher/` 是独立构建的 CleanYourTV 客厅桌面（MIT），见其 README 与 LICENSE。Shelf 本体为 GPL-3.0-or-later；两个应用保持各自包名和许可。没有包含电视地址、签名私钥或服务凭据。
 
-在「设置 → 在线匹配」中可以填写 TMDB API Read Access Token 和 OpenSubtitles 应用 API Key。凭据仅需在电视上输入。
+## 0.4.1 TMDB 连接修复
 
-- TMDB 按片名、年份和影片类别匹配。片名相同且无法区分的结果会保留为本地文件名。已有本地封面和背景时优先使用本地图片。
-- OpenSubtitles 在没有同名外置字幕时优先查询文件指纹，自动下载需要精确匹配。也可以在详情或播放的字幕菜单手动查找。未登录时下载额度由服务方决定。
-- 本地 SMB 浏览、播放、封面和字幕不需要联网账号。在线接口需要各自的密钥及电视能访问对应服务。
-- [TMDB 应用鉴权](https://developer.themoviedb.org/docs/authentication-application)
-- [OpenSubtitles API 说明](https://blog.opensubtitles.com/opensubtitles/how-to-build-a-movie-subtitle-finder-cli-with-python-and-the-opensubtitles-api)
+TMDB 请求改用 `https://api.tmdb.org/3`，解决本次电视网络对原入口解析异常导致的连接超时；保留标准 HTTPS 证书验证，不修改电视或路由器 DNS。电视实测中文资料、自动匹配、手动搜索和海报读取通过。用户令牌仅在电视设置中加密保存，不包含在 APK 或源码中。
 
-## 构建与范围
+## 0.4 动效更新
 
-使用 JDK 17 和 Android SDK 36。运行 `./gradlew assembleDebug`，APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。
+- 页面使用持续存在的容器，前进轻柔展开、返回反向收回，设置页采用纵向浮入；最多保留两层，快速连按可打断过渡。
+- 焦点采用保留当前速度的弹簧，缩放、抬升、细边框与文字亮度协调变化；遥控器确认键有轻微按压反馈。
+- 返回页面恢复焦点与滚动位置；同页刷新和资料更新不重复播放整页入场动画。
+- 播放控制栏及字幕安全边距平滑过渡，弹窗统一淡入淡出，远程图片载入时渐显。
+- 视频 SurfaceView 保持原尺寸、不做缩放；首帧就绪前保留上一层界面，随后淡出，减少开播时的空黑屏。
+- 设置 → 减少动态效果：关闭位移、缩放和动态转场，保留清晰焦点提示。也尊重系统关闭动画的设置。
 
-当前版本提供 SMB 2/3、海报与详情、按电影/剧集分类、收藏、搜索、继续观看、外置字幕、Media3 播放控制、音轨和字幕选择，以及设备音视频能力诊断。TMDB、OpenSubtitles 接口需要有效密钥才能完成端到端验证。Plex、Emby、Jellyfin、其他网络协议、云端同步、剧集按季聚合、片头识别和完整的 Infuse 格式兼容仍需实现。
+动效参考 Apple HIG Motion / Designing for tvOS 和 WWDC《Animate with springs》。参数为 Shelf 在 Android 电视上的独立适配，不声称复制了 iOS 27 的私有实现或准确曲线。详见 MOTION-DESIGN.md。
 
-所用 Material Icons 来自 Google，授权见 `MATERIAL-ICONS-LICENSE.txt`。Infuse 的品牌、官方界面截图和测试海报不包含在 APK 或源码中。
+## 0.3 新增
+
+- 同一部剧聚合为一张卡片，进入后按季、集数排列；每季可单独浏览。支持 S01E02、1x02、[1x02]、季文件夹中的 E02，以及从父目录补充剧名。
+- 播放菜单提供上一集/下一集，跳过同集不同编码文件，正常剧集可跨季；特别篇与正季分开。设置中可开启播完后自动下一集，默认关闭。
+- 手动标记已看/未看、从头播放；低于 30 秒不显示续播，达到 94% 按看完处理。已看影片重新播放后中途退出，可在 80% 前继续。
+- SQLite 保存片库及匹配结果；扫描失败保留上次结果，缓存可在 NAS 离线时浏览。图片缓存上限 64 MiB。离线不能播放尚未下载的视频。
+- 详情 → 更多 → 修正影片匹配：搜索 TMDB，按名称、年份及 ID 手选。剧集修正应用于本剧已扫描集数，并保存整部剧的覆盖规则。手动结果优先于自动匹配，刷新及重启后保留。
+- 匹配资料增加年份、TMDB 评分、类型和时长（以服务实际返回字段为准）。无资料时显示真实文件名。
+- 音轨与字幕菜单显示友好的编码、声道、采样率、强制字幕及听障辅助标签；信息面板显示片源 HDR / Dolby Vision 等信息。
+- 字幕可选 4 档文字大小、8 种颜色，也可恢复内嵌样式。偏好持久保存；已下载的在线字幕只要缓存文件仍在，就可重新使用。
+- 开源许可文本随 APK 打包，设置内可查。
+
+## 使用
+
+在主屏打开「片库」→ 添加 SMB 共享，输入 NAS 地址、共享名和自己的账号。支持 SMB 2/3，默认端口 445，可指定端口。一次连接一个共享。密码通过设备 Android Keystore 加密。
+
+影片海报可用 `片名-poster.jpg` / `poster.jpg` / `folder.jpg`；背景可用 `片名-fanart.jpg` / `fanart.jpg`。本地图片优先；支持 JPG/PNG/WebP。字幕可用同目录同名 SRT/ASS/SSA/VTT，包括 `Movie.zh.srt`。
+
+在线资料在设置中填写自己的 TMDB API Read Access Token。在线字幕需要自己的 OpenSubtitles API Key；下载还可能需要账号及可用额度。没有这些凭据时，SMB、本地海报、同名字幕、分季、续播和观看标记仍可用。没有导入第三方项目的服务密钥。
+
+## 当前边界
+
+这不是四个项目的完整合并，也未实现 Infuse 全部功能。保留 Media3 播放路线；没有引入 mpv/FFmpeg 引擎、Jellyfin/Plex/Emby 连接、NFO 导入、跨设备同步、片头识别、字幕延迟调整或所有特殊剧集命名规则。剧集按解析后的剧名与年份聚合；多版本管理及复杂动漫命名仍需后续处理。
+
+音轨菜单的 Atmos / DTS:X / TrueHD 标签描述片源，不代表 eARC 已原码输出。最终输出取决于电视、播放器、音响和连接协商。本次没有重新认证无损音频透传或杜比视界 Profile 7/8 兼容。
+
+## 构建与许可
+
+JDK 17、Android SDK 36，Gradle wrapper 8.14.3：
+
+```sh
+./gradlew assembleDebug testDebugUnitTest lintDebug
+```
+
+APK：`app/build/outputs/apk/debug/app-debug.apk`。包名 `local.shelf.player`，版本 0.4.2 / code 6；保留原签名即可覆盖更新并保留用户数据。源码不包含签名私钥、账号、NAS 凭据或真实媒体文件。
+
+`-PshelfApplicationId=local.shelf.player.qa` 可构建独立测试包；设备测试只使用独立测试数据库，不更改用户片库。测试源连接仅在 `.qa` 测试身份下设置，并使用 ADB 反向端口与本机只读共享。
+
+Shelf 0.4.2 按 GPL-3.0-or-later 提供，包括本次复制的 Just Player Pro GPL 代码；Kinema MIT 和 NOVA Apache 许可及署名完整保留。APK 与相应源码一并交付。详见 LICENSE、THIRD-PARTY-NOTICES.md 和 VALIDATION.md。

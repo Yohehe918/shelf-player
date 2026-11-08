@@ -27,6 +27,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+@androidx.media3.common.util.UnstableApi
 final class SmbMedia {
     private static final Set<String> VIDEO = Set.of("mkv", "mp4", "mov", "m4v", "webm", "ts", "m2ts", "avi");
     private static final Set<String> SUBTITLES = Set.of("srt", "ass", "ssa", "vtt");
@@ -87,7 +88,7 @@ final class SmbMedia {
                             && base.regionMatches(true, 0, stem, 0, stem.length())
                             && ".-_".indexOf(base.charAt(stem.length())) >= 0);
                 }).map(name -> join(path, name)).sorted().collect(java.util.stream.Collectors.toList());
-                movies.add(new Catalog.Movie(child, Catalog.title(entry.name), poster, backdrop, subs));
+                movies.add(new Catalog.Movie(child, Catalog.titleInPath(child), poster, backdrop, subs));
             }
         }
     }
