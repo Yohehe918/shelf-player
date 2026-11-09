@@ -47,6 +47,29 @@ final class MotionChecks {
             main(test,()->{require(host[0].getChildCount()==1,"Playback transition leaked old layer");host[0].show(page(activity),"exitVideo",4,false);});
             SystemClock.sleep(180);test.waitForIdleSync();
             main(test,()->require(host[0].getChildCount()==1&&"exitVideo".equals(host[0].route()),"Released video surface remained in exit transition"));
+            ScrollView[] grid = new ScrollView[1];
+            main(test, () -> {
+                grid[0] = page(activity);
+                host[0].show(grid[0], "grid:movies:0", 1, false);
+            });
+            SystemClock.sleep(150);test.waitForIdleSync();
+            main(test, () -> {
+                ((LinearLayout) grid[0].getChildAt(0)).getChildAt(15).requestFocus();
+                grid[0].scrollTo(0, 900);
+                scroll[0] = grid[0].getScrollY();
+                host[0].show(page(activity), "details:movie", 4, false);
+                require(grid[0].isAttachedToWindow() && !grid[0].isShown(),
+                        "Grid was not parked invisibly behind details");
+                host[0].show(grid[0], "grid:movies:0", 1, false);
+            });
+            SystemClock.sleep(150);test.waitForIdleSync();
+            main(test, () -> {
+                require(grid[0].isShown() && grid[0].getScrollY() == scroll[0],
+                        "Parked grid did not keep its scroll position");
+                require(grid[0].findFocus() != null
+                        && "row:15".equals(grid[0].findFocus().getTag(R.id.motion_identity)),
+                        "Parked grid did not restore its focused card");
+            });
         }finally{prefs.edit().putBoolean("reduceMotion",reduced).commit();main(test,()->{if(host[0]!=null)host[0].close();activity.finish();});}
     }
     private static ScrollView page(MainActivity context){ScrollView scroll=new ScrollView(context);LinearLayout rows=new LinearLayout(context);rows.setOrientation(LinearLayout.VERTICAL);scroll.addView(rows);for(int n=0;n<30;n++){Button button=new Button(context);button.setText("Row "+n);Motion.identity(button,"row:"+n);rows.addView(button,new LinearLayout.LayoutParams(-1,100));}return scroll;}

@@ -40,7 +40,7 @@ public final class ShelfInstrumentation extends Instrumentation {
             var atmos=new androidx.media3.common.Format.Builder().setSampleMimeType(androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC).build();
             require("E-AC-3 Atmos".equals(TrackNames.codec(atmos)),"Media3 format integration");
             if(getTargetContext().getPackageName().endsWith(".qa"))getTargetContext().getSharedPreferences("shelf",0).edit().putString("address","127.0.0.1:1446").putString("share","QA").putString("user","").commit();
-            result.putString("stream",(motionChecks?"PASS: 11 motion/navigation checks and artwork coalescing, variant isolation, completion cleanup.\n":"")+"PASS: 14 device checks; SQLite transactions, restart, source isolation, manual-match protection, URI and Media3.\n");finish(Activity.RESULT_OK,result);
+            result.putString("stream",(motionChecks?"PASS: 14 motion/navigation checks and artwork coalescing, variant isolation, completion cleanup.\n":"")+"PASS: 14 device checks; SQLite transactions, restart, source isolation, manual-match protection, URI and Media3.\n");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e+"\n");finish(Activity.RESULT_CANCELED,result);}
         finally{store.close();getTargetContext().deleteDatabase(db);}
     }

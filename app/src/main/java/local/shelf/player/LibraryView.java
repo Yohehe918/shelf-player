@@ -245,19 +245,24 @@ final class LibraryView {
         }
         focus(card, tile, title, () -> click.accept(movie));
         Motion.identity(card,"movie:"+movie.path());
+        queueArtwork(movie, wide, image, artwork);
+        return card;
+    }
+
+    private void queueArtwork(Catalog.Movie movie, boolean wide, ImageView image, ArtLoader artwork) {
         PendingArt item = new PendingArt(movie, wide, image, artwork);
         artworkSlots.add(item);
         pendingArt.add(item);
-        return card;
     }
 
     void details(Catalog.Movie movie, String title, String overview, String playLabel,
                  Runnable play, Runnable favorite, boolean isFavorite, Runnable subtitles, Runnable manage,
+                 int versionCount, Runnable versions,
                  ArtLoader artwork) {
         ImageView backdrop = new ImageView(context);
         backdrop.setScaleType(ImageView.ScaleType.CENTER_CROP);
         frame.addView(backdrop, 0, new FrameLayout.LayoutParams(-1, -1));
-        artwork.load(movie, true, backdrop);
+        queueArtwork(movie, true, backdrop, artwork);
         View left = new View(context);
         left.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
                 new int[]{0xf3131a21, 0xa5121820, 0x02121820}));
@@ -286,6 +291,10 @@ final class LibraryView {
         secondary.addView(action(isFavorite ? "已收藏" : "收藏", favorite), new LinearLayout.LayoutParams(dp(88), dp(40)));
         secondary.addView(action("字幕", subtitles), new LinearLayout.LayoutParams(dp(88), dp(40)));
         secondary.addView(action("更多",manage),new LinearLayout.LayoutParams(dp(88),dp(40)));
+        if (versionCount > 1) {
+            secondary.addView(action("版本 · " + versionCount, versions),
+                    new LinearLayout.LayoutParams(dp(115), dp(40)));
+        }
         info.addView(secondary);
         Button start = action(playLabel, play);
         start.setBackground(buttonBackground(true));

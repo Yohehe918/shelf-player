@@ -16,7 +16,9 @@ import com.hierynomus.smbj.connection.Connection;
 import com.hierynomus.smbj.share.DiskShare;
 import com.hierynomus.smbj.share.File;
 import com.hierynomus.smbj.share.Share;
+import java.io.EOFException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -33,6 +35,10 @@ final class SmbMedia {
     private static final Set<String> VIDEO = Set.of("mkv", "mp4", "mov", "m4v", "webm", "ts", "m2ts", "avi");
     private static final Set<String> SUBTITLES = Set.of("srt", "ass", "ssa", "vtt");
     private static final SmbConfig CONFIG = SmbConfig.builder()
+            .withTimeout(12, TimeUnit.SECONDS).withSoTimeout(20, TimeUnit.SECONDS).build();
+
+    private static final SmbConfig PLAYBACK_CONFIG = SmbConfig.builder()
+            .withReadBufferSize(2 * 1024 * 1024)
             .withTimeout(12, TimeUnit.SECONDS).withSoTimeout(20, TimeUnit.SECONDS).build();
 
     record Source(String host, int port, String share, String user, String domain, char[] password) {
@@ -193,10 +199,15 @@ final class SmbMedia {
     }
 
     private static final class Remote implements AutoCloseable {
-        private final SMBClient client = new SMBClient(CONFIG);
+        private final SMBClient client;
         private DiskShare share;
 
         Remote(Source source) throws IOException {
+            this(source, CONFIG);
+        }
+
+        Remote(Source source, SmbConfig config) throws IOException {
+            client = new SMBClient(config);
             try {
                 Connection connection = client.connect(source.host, source.port);
                 AuthenticationContext auth = source.user.isEmpty() ? AuthenticationContext.anonymous()
@@ -228,7 +239,7 @@ final class SmbMedia {
         private Remote remote;
         private File file;
         private Uri uri;
-        private long offset;
+        private InputStream stream;
         private long remaining;
 
         Input(Source source) {
@@ -239,12 +250,16 @@ final class SmbMedia {
         @Override public long open(DataSpec spec) throws IOException {
             transferInitializing(spec);
             try {
-                remote = new Remote(source);
+                remote = new Remote(source, PLAYBACK_CONFIG);
                 file = openFile(remote.share, String.join("\\", spec.uri.getPathSegments()));
                 long size = file.getFileInformation().getStandardInformation().getEndOfFile();
-                offset = spec.position;
-                if (offset > size) throw new IOException("Read position beyond end of file");
-                remaining = spec.length == C.LENGTH_UNSET ? size - offset : Math.min(size - offset, spec.length);
+                if (spec.position > size) throw new IOException("Read position beyond end of file");
+                long available = size - spec.position;
+                remaining = spec.length == C.LENGTH_UNSET ? available : Math.min(available, spec.length);
+                stream = file.getInputStream(); // SMBJ queues the next read while Media3 consumes this one.
+                if (spec.position > 0 && stream.skip(spec.position) != spec.position) {
+                    throw new IOException("SMB seek failed");
+                }
                 uri = spec.uri;
                 transferStarted(spec);
                 return remaining;
@@ -258,9 +273,8 @@ final class SmbMedia {
             if (length == 0) return 0;
             if (remaining == 0) return C.RESULT_END_OF_INPUT;
             try {
-                int count = file.read(data, offset, start, (int) Math.min(remaining, length));
-                if (count <= 0) return C.RESULT_END_OF_INPUT;
-                offset += count;
+                int count = stream.read(data, start, (int) Math.min(remaining, length));
+                if (count <= 0) throw new EOFException("Unexpected end of SMB file");
                 remaining -= count;
                 bytesTransferred(count);
                 return count;
@@ -272,6 +286,12 @@ final class SmbMedia {
         @Override public Uri getUri() { return uri; }
 
         @Override public void close() {
+            try {
+                if (stream != null) stream.close();
+            } catch (IOException ignored) {
+            } finally {
+                stream = null;
+            }
             try {
                 if (file != null) file.close();
             } catch (Exception ignored) {

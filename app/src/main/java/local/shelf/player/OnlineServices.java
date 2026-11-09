@@ -119,7 +119,7 @@ final class OnlineServices {
             connection.setConnectTimeout(7000);
             connection.setReadTimeout(10000);
             connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("User-Agent", "ShelfPlayer v0.4.4");
+            connection.setRequestProperty("User-Agent", "ShelfPlayer v0.4.5");
             if (!bearer.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + bearer);
             if (!key.isEmpty()) connection.setRequestProperty("Api-Key", key);
             if (body != null) {

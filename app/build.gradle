@@ -9,8 +9,8 @@ android {
         applicationId providers.gradleProperty('shelfApplicationId').getOrElse('local.shelf.player')
         minSdk 34
         targetSdk 34
-        versionCode 8
-        versionName '0.4.4'
+        versionCode 9
+        versionName '0.4.5'
         testInstrumentationRunner 'local.shelf.player.ShelfInstrumentation'
     }
     compileOptions {
