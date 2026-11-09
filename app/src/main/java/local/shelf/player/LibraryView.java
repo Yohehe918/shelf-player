@@ -9,6 +9,7 @@ import android.graphics.drawable.StateListDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -17,6 +18,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.function.Consumer;
 
 final class LibraryView {
@@ -28,6 +30,14 @@ final class LibraryView {
     private final LinearLayout column;
     private final FrameLayout frame;
     private final ScrollView scroll;
+    private final List<PendingArt> artworkSlots = new ArrayList<>();
+    private final List<PendingArt> pendingArt = new ArrayList<>();
+    private final int[] viewport = new int[2];
+    private final int[] location = new int[2];
+    private final Runnable loadVisible = this::loadVisibleArtwork;
+    private final ViewTreeObserver.OnScrollChangedListener artScroll = this::scheduleArtwork;
+    private final ViewTreeObserver.OnGlobalLayoutListener artLayout = this::scheduleArtwork;
+    private ViewTreeObserver artworkObserver;
 
     LibraryView(Activity context,java.util.function.Function<Catalog.Movie,String> displayName) {
         this.displayName=displayName;
@@ -47,6 +57,27 @@ final class LibraryView {
         column.setClipToPadding(false);
         column.setPadding(0, dp(20), 0, dp(30));
         scroll.addView(column);
+        frame.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View view) {
+                artworkObserver = frame.getViewTreeObserver();
+                artworkObserver.addOnScrollChangedListener(artScroll);
+                artworkObserver.addOnGlobalLayoutListener(artLayout);
+                scheduleArtwork();
+            }
+
+            @Override public void onViewDetachedFromWindow(View view) {
+                frame.removeCallbacks(loadVisible);
+                if (artworkObserver != null && artworkObserver.isAlive()) {
+                    artworkObserver.removeOnScrollChangedListener(artScroll);
+                    artworkObserver.removeOnGlobalLayoutListener(artLayout);
+                }
+                artworkObserver = null;
+                pendingArt.clear();
+                for (PendingArt item : artworkSlots) {
+                    if (item.image().getDrawable() == null) pendingArt.add(item);
+                }
+            }
+        });
     }
 
     View root() { return frame; }
@@ -119,6 +150,32 @@ final class LibraryView {
 
     interface ArtLoader { void load(Catalog.Movie movie, boolean wide, ImageView view); }
 
+    private record PendingArt(Catalog.Movie movie, boolean wide, ImageView image, ArtLoader loader) {}
+
+    private void scheduleArtwork() {
+        if (pendingArt.isEmpty()) return;
+        frame.removeCallbacks(loadVisible);
+        frame.postOnAnimation(loadVisible);
+    }
+
+    private void loadVisibleArtwork() {
+        if (!frame.isShown() || pendingArt.isEmpty()) return;
+        frame.getLocationInWindow(viewport);
+        int preload = dp(60);
+        for (var iterator = pendingArt.iterator(); iterator.hasNext();) {
+            PendingArt item = iterator.next();
+            ImageView image = item.image();
+            if (image.getWidth() == 0 || image.getHeight() == 0) continue;
+            image.getLocationInWindow(location);
+            if (location[0] + image.getWidth() <= viewport[0] - preload
+                    || location[0] >= viewport[0] + frame.getWidth() + preload
+                    || location[1] + image.getHeight() <= viewport[1] - preload
+                    || location[1] >= viewport[1] + frame.getHeight() + preload) continue;
+            iterator.remove();
+            item.loader().load(item.movie(), item.wide(), image);
+        }
+    }
+
     void railMovies(List<Catalog.Movie> movies, boolean wide, Consumer<Catalog.Movie> click,
                     ArtLoader artwork, java.util.function.ToIntFunction<Catalog.Movie> progress) {
         LinearLayout row = rail();
@@ -160,14 +217,13 @@ final class LibraryView {
         ImageView image = new ImageView(context);
         image.setScaleType(ImageView.ScaleType.CENTER_CROP);
         tile.addView(image, new FrameLayout.LayoutParams(-1, -1));
-        TextView fallback = label(displayName.apply(movie), 18, WHITE);
+        String name = displayName.apply(movie);
+        TextView fallback = label(name, 18, WHITE);
         fallback.setPadding(dp(10), dp(10), dp(10), dp(10));
         fallback.setGravity(Gravity.CENTER);
         fallback.setMaxLines(3);
         tile.addView(fallback, new FrameLayout.LayoutParams(-1, -1));
         image.setTag(fallback);
-        image.addOnLayoutChangeListener((v, a, b, c, d, e, f, g, h) ->
-                fallback.setVisibility(image.getDrawable() == null ? View.VISIBLE : View.GONE));
         if (progress > 0) {
             View line = new View(context);
             line.setBackground(gradient(new int[]{ORANGE, ORANGE}, 3));
@@ -176,7 +232,7 @@ final class LibraryView {
             tile.addView(line, lineSize);
         }
         card.addView(tile, new LinearLayout.LayoutParams(dp(width), dp(height)));
-        TextView title = label(displayName.apply(movie), 15, DIM);
+        TextView title = label(name, 15, DIM);
         title.setSingleLine();
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         title.setGravity(Gravity.CENTER);
@@ -189,7 +245,9 @@ final class LibraryView {
         }
         focus(card, tile, title, () -> click.accept(movie));
         Motion.identity(card,"movie:"+movie.path());
-        artwork.load(movie, wide, image);
+        PendingArt item = new PendingArt(movie, wide, image, artwork);
+        artworkSlots.add(item);
+        pendingArt.add(item);
         return card;
     }
 

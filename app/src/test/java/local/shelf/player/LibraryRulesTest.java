@@ -27,4 +27,34 @@ public class LibraryRulesTest {
     @Test public void specialsAreNotAutoQueued(){var special=m("A.S00E01.mkv");assertNull(SeriesIndex.adjacent(List.of(special,m("A.S01E01.mkv")),special,true));}
     @Test public void previousNumericallySorted(){var last=m("A.S01E10.mkv");assertEquals(2,SeriesIndex.adjacent(List.of(last,m("A.S01E02.mkv"),m("A.S01E01.mkv")),last,false).title().episode());}
     @Test public void subtitleColorsSafeFallback(){assertEquals(SubtitleColors.argb("white"),SubtitleColors.argb("unknown"));assertEquals("white",SubtitleColors.keyAt(-1));assertEquals(8,SubtitleColors.count());}
+    @Test public void packagedChineseEpisodeKeepsTheShowAndEpisode() {
+        var title = Catalog.titleInPath("Southland S02E01-E06 南城警事 1080p\\南城警事.第二季.2010.EP06.HD1080P.mp4");
+        assertEquals(new Catalog.Title("Southland", "", 2, 6), title);
+    }
+
+    @Test public void bilingualReleaseNamesUseCleanExactCandidates() {
+        assertEquals(List.of("天启Z：完结的起点", "Apocalypse Z The Beginning of the End",
+                        "天启Z：完结的起点 Apocalypse Z The Beginning of the End"),
+                Catalog.lookupNames("[4k世界]天启Z：完结的起点 Apocalypse Z The Beginning of the End"));
+        assertEquals("Tom Clancy's Jack Ryan", Catalog.cleanDisplayName("Tom Clancy&#39;s Jack Ryan"));
+    }
+
+    @Test public void namedConcertDiscsKeepTheParentTitle() {
+        String path = "Live Concert (2010)\\DISC2.ts";
+        var movie = new Catalog.Movie(path, Catalog.titleInPath(path), null, null, List.of());
+        assertEquals("Live Concert", movie.title().name());
+        assertEquals("2", movie.discNumber());
+    }
+    @Test public void chineseOnlySeasonFolderRecoversEpisodeNumber() {
+        var title = Catalog.titleInPath("南城警事.第二季.2010.EP01-06\\南城警事.第二季.2010.EP06.mp4");
+        assertEquals(new Catalog.Title("南城警事", "", 2, 6), title);
+    }
+
+    @Test public void matchedSeriesAliasesShareAGroupAndEpisodeOrder() {
+        var first = m("Southland.S02E06.mkv");
+        var next = m("南城警事.S02E07.mkv");
+        var grouping = (java.util.function.Function<Catalog.Movie, String>) movie -> "tmdb:example";
+        assertEquals(List.of(first), SeriesIndex.representatives(List.of(next, first), grouping));
+        assertEquals(next, SeriesIndex.adjacent(List.of(next, first), first, true, grouping));
+    }
 }

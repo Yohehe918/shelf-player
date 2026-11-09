@@ -12,7 +12,14 @@ final class Catalog {
     private static final Pattern BLURAY_STREAM = Pattern.compile("(?i)(?:^|\\\\)BDMV\\\\STREAM\\\\[^\\\\]+$");
     private static final Pattern DISC_NUMBER =
             Pattern.compile("(?i)(?:^|[ ._-])(?:disc|disk|cd|bd|d)[ ._-]*([0-9]+)$");
-    private static final Pattern SEASON_PACK = Pattern.compile("(?i)^(.+?)[ ._-]+S([0-9]{1,2})(?:[ ._-]|$)");
+    private static final Pattern SEASON_PACK = Pattern.compile("(?i)^(.+?)[ ._-]+S([0-9]{1,2})(?=E[0-9]|[ ._-]|$)");
+    private static final String CHINESE_NUMBERS = "零一二三四五六七八九";
+    private static final Pattern CHINESE_SEASON = Pattern.compile(
+            "^(.+?)[ ._-]*第([0-9]{1,2}|[零一二三四五六七八九]|[一二三四五六七八九]?十[一二三四五六七八九]?)季");
+    private static final Pattern FILE_EPISODE = Pattern.compile("(?i)(?:^|[ ._-])EP[ ._-]*([0-9]{1,3})(?=[ ._-]|$)");
+    private static final Pattern LEADING_RELEASE_TAG = Pattern.compile("(?i)^(?:\\[(?:[0-9]+k世界|BT世界网|[0-9]+p|www\\.[^\\]]+)\\]\\s*)+");
+    private static final Pattern HAN_FIRST = Pattern.compile("^(.+?\\p{IsHan})\\s+([A-Za-z][^\\p{IsHan}]+)$");
+    private static final Pattern LATIN_FIRST = Pattern.compile("^([A-Za-z][^\\p{IsHan}]+?)\\s+(\\p{IsHan}.*)$");
     private static final Pattern YEAR = Pattern.compile("(?<!\\d)((?:19|20)\\d{2})(?!\\d)");
     private static final Pattern RELEASE = Pattern.compile(
             "(?i)[. _-]+(?:2160p|1080p|720p|4k|uhd|bluray|blu-ray|webrip|web-dl|hdtv|remux|hdr10|hevc|x264|x265)(?:[. _-]|$)");
@@ -35,9 +42,12 @@ final class Catalog {
             return show == null ? title : show;
         }
         String discNumber() {
-            if (!bluRay()) return "";
-            Matcher disc = DISC_NUMBER.matcher(lastComponent(discFolder));
-            return disc.find() ? disc.group(1) : "";
+            if (bluRay()) {
+                Matcher disc = DISC_NUMBER.matcher(lastComponent(discFolder));
+                return disc.find() ? disc.group(1) : "";
+            }
+            Matcher disc = DISC_NUMBER.matcher(basename(filename()));
+            return disc.matches() ? disc.group(1) : "";
         }
         String filename() { return path.substring(path.lastIndexOf('\\') + 1); }
     }
@@ -98,6 +108,27 @@ final class Catalog {
         int season=ep==null?0:ep.season(),episode=ep==null?0:ep.episode();
         String name=ep==null?value:prefix?"":ep.name();
         String parent=parts.length>1?parts[parts.length-2]:"";
+        if (ep == null && !parent.isBlank()) {
+            Matcher pack = SEASON_PACK.matcher(parent);
+            Matcher fileEpisode = FILE_EPISODE.matcher(value);
+            if (fileEpisode.find()) {
+                int episodeNumber = Integer.parseInt(fileEpisode.group(1));
+                if (pack.find()) {
+                    Title show = title(pack.group(1) + ".mkv");
+                    return new Title(show.name(), show.year(), Integer.parseInt(pack.group(2)), episodeNumber);
+                }
+                Matcher chinese = CHINESE_SEASON.matcher(parent);
+                if (chinese.find()) {
+                    Title show = title(chinese.group(1) + ".mkv");
+                    return new Title(show.name(), show.year(), seasonNumber(chinese.group(2)), episodeNumber);
+                }
+            }
+            Matcher disc = DISC_NUMBER.matcher(value);
+            if (disc.matches()) {
+                Title container = title(parent + ".mkv");
+                return new Title(container.name(), container.year(), 0, 0);
+            }
+        }
         Matcher folderSeason=FOLDER_SEASON.matcher(parent);
         if(folderSeason.matches()){
             if(episode==0){Matcher e=FOLDER_EPISODE.matcher(value+" ");if(e.matches()){season=Integer.parseInt(folderSeason.group(1));episode=Integer.parseInt(e.group(1));name="";}}
@@ -113,7 +144,30 @@ final class Catalog {
         String clean=name.substring(0,cut).replaceAll("[._]+"," ").replaceAll("[\\s(\\[\\-]+$","").trim();
         if(clean.isEmpty()&&!parent.isBlank()&&!parent.equals(value)){Title parentTitle=title(parent+".mkv");clean=parentTitle.name();if(year.isEmpty())year=parentTitle.year();}
         if(episode>0&&year.isEmpty()&&!parent.isBlank()){Title container=title(parent+".mkv");if(TitleMatching.literal(container.name()).equals(TitleMatching.literal(clean)))year=container.year();}
-        return new Title(clean.isEmpty()?value:clean,year,season,episode);
+        return new Title(cleanDisplayName(clean.isEmpty()?value:clean),year,season,episode);
+    }
+
+    private static int seasonNumber(String text) {
+        if (text.charAt(0) >= '0' && text.charAt(0) <= '9') return Integer.parseInt(text);
+        int tens = text.indexOf('十');
+        if (tens == -1) return CHINESE_NUMBERS.indexOf(text.charAt(0));
+        int first = tens == 0 ? 1 : CHINESE_NUMBERS.indexOf(text.charAt(0));
+        int last = tens + 1 == text.length() ? 0 : CHINESE_NUMBERS.indexOf(text.charAt(tens + 1));
+        return first * 10 + last;
+    }
+
+    static String cleanDisplayName(String name) {
+        String clean = LEADING_RELEASE_TAG.matcher(name).replaceFirst("")
+                .replace("&#39;", "'").replace("&#x27;", "'").replace("&apos;", "'")
+                .replace("&amp;", "&").trim();
+        return clean.isEmpty() ? name : clean;
+    }
+
+    static List<String> lookupNames(String name) {
+        String clean = cleanDisplayName(name);
+        Matcher split = HAN_FIRST.matcher(clean);
+        if (!split.matches()) split = LATIN_FIRST.matcher(clean);
+        return split.matches() ? List.of(split.group(1).trim(), split.group(2).trim(), clean) : List.of(clean);
     }
 
     static Uri uri(String path) {

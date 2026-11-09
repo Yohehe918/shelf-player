@@ -1,6 +1,12 @@
-# Shelf 0.4.3 — SMB 电视片库
+# Shelf 0.4.4 — SMB 电视片库
 
 面向小米 S Pro Mini LED / HyperOS 3 的原生 Android TV 播放器。沿用 Shelf 的片库界面，整合经过审查的 NOVA、Kinema 和 Just Player Pro 代码；来源、文件、提交版本、改动和许可证见 THIRD-PARTY-NOTICES.md。
+
+## 0.4.4 片库标题与性能
+
+片名匹配会尝试清理后的中文名或外文名，保留年份和类别校验。带「第几季＋EP」的合集可识别到对应季和集，匹配到同一剧集的不同文件名也会归到一起。详情中的「更多 → 修改显示标题」可设置可搜索的本机标题，缺海报时用它生成标题卡。
+
+海报墙每页 24 条，靠近可见区域时才读取封面，按显示尺寸解码。海报墙进出只绘制当前页面，从详情返回时复用有效的卡片和焦点位置。在线资料查询和 SMB 扫描分开排队。
 
 ## 0.4.3 蓝光原盘片库
 
@@ -63,8 +69,8 @@ JDK 17、Android SDK 36，Gradle wrapper 8.14.3：
 ./gradlew assembleDebug testDebugUnitTest lintDebug
 ```
 
-APK：`app/build/outputs/apk/debug/app-debug.apk`。包名 `local.shelf.player`，版本 0.4.3 / code 7；保留原签名即可覆盖更新并保留用户数据。源码不包含签名私钥、账号、NAS 凭据或真实媒体文件。
+APK：`app/build/outputs/apk/debug/app-debug.apk`。包名 `local.shelf.player`，版本 0.4.4 / code 8；保留原签名即可覆盖更新并保留用户数据。源码不包含签名私钥、账号、NAS 凭据或真实媒体文件。
 
 `-PshelfApplicationId=local.shelf.player.qa` 可构建独立测试包；设备测试只使用独立测试数据库，不更改用户片库。测试源连接仅在 `.qa` 测试身份下设置，并使用 ADB 反向端口与本机只读共享。
 
-Shelf 0.4.3 按 GPL-3.0-or-later 提供，包括本次复制的 Just Player Pro GPL 代码；Kinema MIT 和 NOVA Apache 许可及署名完整保留。APK 与相应源码一并交付。详见 LICENSE、THIRD-PARTY-NOTICES.md 和 VALIDATION.md。
+Shelf 0.4.4 按 GPL-3.0-or-later 提供，包括本次复制的 Just Player Pro GPL 代码；Kinema MIT 和 NOVA Apache 许可及署名完整保留。APK 与相应源码一并交付。详见 LICENSE、THIRD-PARTY-NOTICES.md 和 VALIDATION.md。

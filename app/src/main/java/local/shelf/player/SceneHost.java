@@ -36,17 +36,21 @@ final class SceneHost extends FrameLayout {
         Layer next=new Layer(getContext(),screen,route,depth,video);
         current=next;
         View initialFocus=screen.findFocus();
-        if(old!=null){Motion.settle(old.content,true);old.active=false;old.setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);old.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);}
         boolean same=old!=null&&old.route.equals(route);
         boolean animate=old!=null&&!same&&(Motion.enabled(getContext())||video);
         boolean playback=old!=null&&(old.video||video);
+        boolean gridTransition=animate&&!playback&&(gridRoute(route)||gridRoute(old.route));
+        if(old!=null&&!gridTransition){Motion.settle(old.content,true);old.active=false;old.setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);old.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);}
         boolean back=old!=null&&depth<old.depth;
         boolean modal=isModal(route)||(old!=null&&isModal(old.route)&&back);
         Rect origin=new Rect();
         View focused=old==null?null:old.content.findFocus();
         if(focused!=null)focused.getGlobalVisibleRect(origin);
         addView(next,new FrameLayout.LayoutParams(-1,-1));
-        if(animate){
+        if(gridTransition){
+            removeView(old);
+            next.setTranslationX(Motion.dp(this,back?-12:12));
+        }else if(animate){
             outgoing=old;
             if(playback){next.setAlpha(1);if(video&&!old.video)old.bringToFront();}
             else next.setAlpha(0);
@@ -60,12 +64,27 @@ final class SceneHost extends FrameLayout {
                 else if(initialFocus!=null)initialFocus.requestFocus();
                 else screen.requestFocus(FOCUS_DOWN);
                 Motion.settle(screen,false);
-                if(old!=null)old.content.jumpDrawablesToCurrentState();
-                if(animate)start(old,next,back,modal,playback,origin,ticket);
+                if(old!=null&&!gridTransition)old.content.jumpDrawablesToCurrentState();
+                if(gridTransition)startGrid(next,back,ticket);
+                else if(animate)start(old,next,back,modal,playback,origin,ticket);
                 return true;
             }
         });
     }
+    private static boolean gridRoute(String route) {
+        return route.startsWith("grid:") || route.startsWith("season:");
+    }
+
+    private void startGrid(Layer next, boolean back, int ticket) {
+        float distance = Motion.dp(this, back ? -12 : 12);
+        transition = new Motion.Spring(0, 340, 1f, fraction -> {
+            if (ticket != generation) return;
+            float progress = Math.min(1, fraction);
+            next.setTranslationX(distance * (1 - progress));
+        });
+        transition.to(1, true);
+    }
+
     void revealVideo(){
         if(current==null||!current.video)return;
         current.ready=true;

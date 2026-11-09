@@ -51,12 +51,15 @@ import java.util.concurrent.Executors;
 
 @androidx.media3.common.util.UnstableApi
 public final class MainActivity extends Activity {
+    private static final int GRID_PAGE_SIZE = 24;
     private static final int INK = 0xff101621;
     private static final int CARD = 0xff1b2431;
     private static final int PAPER = 0xfff3eee8;
     private static final int QUIET = 0xffaeb9cb;
     private static final int AMBER = 0xffe7be8e;
     private final ExecutorService network = Executors.newSingleThreadExecutor();
+    private final ExecutorService metadataWorker = Executors.newSingleThreadExecutor();
+    private java.util.concurrent.Future<?> metadataRefresh;
     private final ExecutorService artwork = Executors.newFixedThreadPool(3);
     private final LruCache<String, Bitmap> images = new LruCache<>(24 * 1024 * 1024) {
         @Override protected int sizeOf(String key, Bitmap value) { return value.getByteCount(); }
@@ -65,8 +68,10 @@ public final class MainActivity extends Activity {
     private final Map<String, List<java.lang.ref.WeakReference<ImageView>>> pendingArt = new HashMap<>();
     private volatile boolean destroyed;
     private final Map<String, OnlineServices.Metadata> metadata = new HashMap<>();
+    private final Map<String, String> normalizedSeriesNames = new HashMap<>();
     private final Map<String, List<MediaItem.SubtitleConfiguration>> extraSubtitles = new HashMap<>();
     private List<Catalog.Movie> movies = List.of();
+    private long libraryRevision;
     private SharedPreferences saved;
     private LibraryStore store;
     private Runnable pageBack;
@@ -212,7 +217,7 @@ public final class MainActivity extends Activity {
             try {
                 List<Catalog.Movie> cached=store.library(next.identity());
                 Map<String,OnlineServices.Metadata> remembered=store.metadata(next.identity());
-                if(!cached.isEmpty())postUi(()->{if(isDestroyed())return;if(source==null||!source.identity().equals(next.identity())){source=next;movies=cached;metadata.clear();metadata.putAll(remembered);if(page.equals("home"))showHome();}});
+                if(!cached.isEmpty())postUi(()->{if(isDestroyed())return;if(source==null||!source.identity().equals(next.identity())){source=next;movies=cached;libraryRevision++;normalizedSeriesNames.clear();metadata.clear();metadata.putAll(remembered);if(page.equals("home"))showHome();}});
                 List<Catalog.Movie> indexed = SmbMedia.index(next);
                 store.saveLibrary(next.identity(),indexed);
                 postUi(() -> {
@@ -223,16 +228,23 @@ public final class MainActivity extends Activity {
                     }
                     source = next;
                     movies = indexed;
+                    libraryRevision++;
+                    normalizedSeriesNames.clear();
                     remembered.forEach(metadata::putIfAbsent);
                     loading = false;
                     libraryMessage = "";
                     if (connected != null) connected.run();
                     if(player==null&&(page.equals("home")||page.equals("connect")))showHome();
                 });
-                if (!tmdb.isEmpty()) {
-                    fetchMetadata(next, indexed.stream().filter(Catalog.Movie::bluRay).toList(), tmdb);
-                    fetchMetadata(next, indexed.stream().filter(movie -> !movie.bluRay()).toList(), tmdb);
-                }
+                if (!tmdb.isEmpty()) postUi(() -> {
+                    if (metadataRefresh != null) metadataRefresh.cancel(true);
+                    metadataRefresh = metadataWorker.submit(() -> {
+                        fetchMetadata(next, indexed.stream().filter(Catalog.Movie::bluRay).toList(), tmdb);
+                        if (!Thread.currentThread().isInterrupted()) {
+                            fetchMetadata(next, indexed.stream().filter(movie -> !movie.bluRay()).toList(), tmdb);
+                        }
+                    });
+                });
             } catch (Exception error) {
                 Log.w("ShelfPlayer", "SMB indexing failed: " + error.getClass().getSimpleName());
                 postUi(() -> {
@@ -259,13 +271,20 @@ public final class MainActivity extends Activity {
                         +TitleMatching.literal(lookupTitle.name())+"|"+lookupTitle.year();
                 if(!lookups.containsKey(lookup)&&!(movie.title().series()&&existing.containsKey("@series:"+SeriesIndex.group(movie))))lookups.put(lookup,OnlineServices.movie(lookupTitle,token));
                 OnlineServices.Metadata result=movie.title().series()&&existing.containsKey("@series:"+SeriesIndex.group(movie))?existing.get("@series:"+SeriesIndex.group(movie)):lookups.get(lookup);
-                if(result!=null){store.put(current.identity(),movie.metadataKey(),result,false);found.put(movie.metadataKey(),result);}
+                if(result!=null && !Thread.currentThread().isInterrupted()){store.put(current.identity(),movie.metadataKey(),result,false);found.put(movie.metadataKey(),result);}
             }catch(Exception error){Log.w("ShelfPlayer","TMDB request failed: "+error.getClass().getSimpleName());break;}
         }
-        postUi(()->{if(isDestroyed()||current!=source)return;found.forEach(metadata::putIfAbsent);if(page.equals("home")&&!found.isEmpty())showHome();});
+        postUi(() -> {
+            if (current != source || found.isEmpty()) return;
+            found.forEach(metadata::putIfAbsent);
+            libraryRevision++;
+            if (page.equals("home")) showHome();
+        });
     }
 
     private void showHome() {
+        pageBack = null;
+        leaveDetails = null;
         page = "home";
         LibraryView view = new LibraryView(this,this::displayName);
         view.navigation(this::search, () -> {
@@ -298,7 +317,6 @@ public final class MainActivity extends Activity {
     }
 
     private void grid(String heading, Predicate<Catalog.Movie> filter, int index) {
-        page = "grid";
         List<Catalog.Movie> filtered = collapsed(movies.stream().filter(filter).toList()).stream()
                 .sorted(Comparator.comparing(movie -> movie.title().name(), String.CASE_INSENSITIVE_ORDER))
                 .collect(java.util.stream.Collectors.toList());
@@ -306,21 +324,40 @@ public final class MainActivity extends Activity {
         view.gridStyle();
         view.heading(heading);
         if (filtered.isEmpty()) view.empty("这里还没有影片", "连接共享或切换片库分类。", "返回首页", this::showHome);
-        if (index > 0) view.nextPage("上一页", () -> grid(heading, filter, index - 48));
-        view.gridMovies(filtered.subList(Math.min(filtered.size(), index), Math.min(filtered.size(), index + 48)),
-                movie -> browse(movie, () -> grid(heading, filter, index)), this::loadArt, this::progress);
-        if (filtered.size() > index + 48) view.nextPage("下一页", () -> grid(heading, filter, index + 48));
-        mount(view.root(),"grid:"+heading+":"+index,1);
+        if (index > 0) view.nextPage("上一页", () -> grid(heading, filter, index - GRID_PAGE_SIZE));
+        String route = "grid:" + heading + ":" + index;
+        long revision = libraryRevision;
+        View screen = view.root();
+        Runnable back = () -> {
+            if (revision != libraryRevision || screen.isAttachedToWindow()) {
+                grid(heading, filter, index);
+                return;
+            }
+            if (screen.getParent() instanceof android.view.ViewGroup parent) parent.removeView(screen);
+            mountGrid(screen, route);
+        };
+        view.gridMovies(filtered.subList(Math.min(filtered.size(), index), Math.min(filtered.size(), index + GRID_PAGE_SIZE)),
+                movie -> browse(movie, back), this::loadArt, this::progress);
+        if (filtered.size() > index + GRID_PAGE_SIZE) view.nextPage("下一页", () -> grid(heading, filter, index + GRID_PAGE_SIZE));
+        mountGrid(screen, route);
+    }
+
+    private void mountGrid(View screen, String route) {
+        pageBack = null;
+        leaveDetails = null;
+        page = "grid";
+        mount(screen, route, 1);
     }
 
     private long resume(Catalog.Movie m){return ResumePolicy.resume(saved.getLong(key(m),0),saved.getLong("duration:"+key(m),0),watched(m));}
     private boolean watched(Catalog.Movie m){return saved.getBoolean("watched:"+key(m),false);}
-    private List<Catalog.Movie> collapsed(List<Catalog.Movie> all){List<Catalog.Movie> out=new ArrayList<>(all.stream().filter(m->!m.title().series()).toList());out.addAll(SeriesIndex.representatives(all));return out;}
+    private List<Catalog.Movie> collapsed(List<Catalog.Movie> all){List<Catalog.Movie> out=new ArrayList<>(all.stream().filter(m->!m.title().series()).toList());out.addAll(SeriesIndex.representatives(all,this::seriesKey));return out;}
     private void browse(Catalog.Movie movie,Runnable back){if(movie.title().series())showSeries(movie,back);else showDetails(movie,back);}
     private void showSeries(Catalog.Movie movie,Runnable back){
         page="series";pageBack=back;LibraryView view=new LibraryView(this,this::displayName);view.heading(displayName(movie));
-        List<Catalog.Movie> episodes=SeriesIndex.episodes(movies,movie);
-        Catalog.Movie next=episodes.stream().filter(m->resume(m)>0).findFirst().orElse(SeriesIndex.firstUnwatched(movies,movie,this::watched));
+        List<Catalog.Movie> episodes=SeriesIndex.episodes(movies,movie,this::seriesKey);
+        Catalog.Movie next=episodes.stream().filter(m->resume(m)>0).findFirst()
+                .orElseGet(()->episodes.stream().filter(m->!watched(m)).findFirst().orElse(movie));
         view.nextPage((resume(next)>0?"继续观看":"播放")+" · "+next.title().caption(),()->{leaveDetails=()->showSeries(movie,back);startMovie(next);});
         for(int season:episodes.stream().map(m->m.title().season()).distinct().toList()){
             List<Catalog.Movie> group=episodes.stream().filter(m->m.title().season()==season).toList();
@@ -328,26 +365,47 @@ public final class MainActivity extends Activity {
             view.nextPage("查看全部集数",()->showSeason(movie,season,back,0));
             view.railMovies(group,false,m->showDetails(m,()->showSeries(movie,back)),this::loadArt,this::progress);
         }
-        mount(view.root(),"series:"+SeriesIndex.group(movie),2);
+        mount(view.root(),"series:"+seriesKey(movie),2);
     }
     private void showSeason(Catalog.Movie series,int season,Runnable back,int start){
         page="season";pageBack=()->showSeries(series,back);LibraryView view=new LibraryView(this,this::displayName);
-        List<Catalog.Movie> items=SeriesIndex.episodes(movies,series).stream().filter(m->m.title().season()==season).toList();
+        List<Catalog.Movie> items=SeriesIndex.episodes(movies,series,this::seriesKey).stream().filter(m->m.title().season()==season).toList();
         view.heading(displayName(series)+" · "+(season==0?"特别篇":"第 "+season+" 季"));
-        if(start>0)view.nextPage("上一页",()->showSeason(series,season,back,Math.max(0,start-48)));
-        view.gridMovies(items.subList(Math.min(start,items.size()),Math.min(start+48,items.size())),m->showDetails(m,()->showSeason(series,season,back,start)),this::loadArt,this::progress);
-        if(start+48<items.size())view.nextPage("下一页",()->showSeason(series,season,back,start+48));mount(view.root(),"season:"+SeriesIndex.group(series)+":"+season+":"+start,3);
+        if(start>0)view.nextPage("上一页",()->showSeason(series,season,back,Math.max(0,start-GRID_PAGE_SIZE)));
+        view.gridMovies(items.subList(Math.min(start,items.size()),Math.min(start+GRID_PAGE_SIZE,items.size())),m->showDetails(m,()->showSeason(series,season,back,start)),this::loadArt,this::progress);
+        if(start+GRID_PAGE_SIZE<items.size())view.nextPage("下一页",()->showSeason(series,season,back,start+GRID_PAGE_SIZE));mount(view.root(),"season:"+seriesKey(series)+":"+season+":"+start,3);
     }
-    private void stepEpisode(Catalog.Movie movie,boolean forward){Catalog.Movie next=SeriesIndex.adjacent(movies,movie,forward);if(next==null)return;Runnable back=leaveDetails;releasePlayer();showDetails(next,back==null?this::showHome:back);startMovie(next);}
+    private void stepEpisode(Catalog.Movie movie,boolean forward){Catalog.Movie next=SeriesIndex.adjacent(movies,movie,forward,this::seriesKey);if(next==null)return;Runnable back=leaveDetails;releasePlayer();showDetails(next,back==null?this::showHome:back);startMovie(next);}
     private void detailActions(Catalog.Movie movie,Runnable back){
-        String[] choices={"从头播放",watched(movie)?"标记为未看":"标记为已看","修正影片匹配",movie.title().series()?"恢复整部剧的自动匹配":"恢复自动匹配"};
+        String[] choices={"从头播放",watched(movie)?"标记为未看":"标记为已看","修正影片匹配",movie.title().series()?"恢复整部剧的自动匹配":"恢复自动匹配","修改显示标题"};
         new MotionDialog(this).setTitle("影片管理").setItems(choices,(d,which)->{
-            if(which==0){saved.edit().putLong(key(movie),0).apply();startMovie(movie);}
-            else if(which==1){saved.edit().putBoolean("watched:"+key(movie),!watched(movie)).putLong(key(movie),0).apply();showDetails(movie,back);}
+            if(which==0){libraryRevision++;saved.edit().putLong(key(movie),0).apply();startMovie(movie);}
+            else if(which==1){libraryRevision++;saved.edit().putBoolean("watched:"+key(movie),!watched(movie)).putLong(key(movie),0).apply();showDetails(movie,back);}
             else if(which==2)correctMatch(movie,back);
-            else{List<Catalog.Movie> targets=matchingTargets(movie);SmbMedia.Source origin=source;String id=origin.identity();targets.forEach(m->metadata.remove(m.metadataKey()));if(movie.title().series())metadata.remove("@series:"+SeriesIndex.group(movie));network.execute(()->{List<String> resetPaths=new ArrayList<>(targets.stream().map(Catalog.Movie::metadataKey).toList());if(movie.title().series())resetPaths.add("@series:"+SeriesIndex.group(movie));store.forget(id,resetPaths);String token=secrets.read("tmdb");if(!token.isEmpty())fetchMetadata(origin,targets,token);});showDetails(movie,back);}
+            else if(which==4)renameDisplayTitle(movie,back);
+            else{libraryRevision++;List<Catalog.Movie> targets=matchingTargets(movie);SmbMedia.Source origin=source;String id=origin.identity();targets.forEach(m->metadata.remove(m.metadataKey()));if(movie.title().series())metadata.remove("@series:"+SeriesIndex.group(movie));metadataWorker.execute(()->{List<String> resetPaths=new ArrayList<>(targets.stream().map(Catalog.Movie::metadataKey).toList());if(movie.title().series())resetPaths.add("@series:"+SeriesIndex.group(movie));store.forget(id,resetPaths);String token=secrets.read("tmdb");if(!token.isEmpty())fetchMetadata(origin,targets,token);});showDetails(movie,back);}
         }).show();
     }
+    private void renameDisplayTitle(Catalog.Movie movie, Runnable back) {
+        EditText field = new EditText(this);
+        field.setSingleLine(true);
+        String preference = "display:" + key(movie);
+        field.setText(saved.getString(preference, displayName(movie)));
+        field.setSelectAllOnFocus(true);
+        new MotionDialog(this).setTitle("修改显示标题").setView(field)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    libraryRevision++;
+                    String name = field.getText().toString().trim();
+                    if (name.isEmpty()) saved.edit().remove(preference).apply();
+                    else saved.edit().putString(preference, name).apply();
+                    showDetails(movie, back);
+                }).setNeutralButton("恢复自动标题", (dialog, which) -> {
+                    libraryRevision++;
+                    saved.edit().remove(preference).apply();
+                    showDetails(movie, back);
+                }).setNegativeButton("取消", null).show();
+    }
+
     private List<Catalog.Movie> matchingTargets(Catalog.Movie movie){return movie.title().series()?SeriesIndex.episodes(movies,movie):List.of(movie);}
     private void correctMatch(Catalog.Movie movie,Runnable back){
         String token=secrets.read("tmdb");if(token.isEmpty()){new MotionDialog(this).setMessage("请先在在线匹配设置中填写自己的 TMDB Token。").setPositiveButton("设置",(d,w)->showServices()).setNegativeButton("取消",null).show();return;}
@@ -365,12 +423,12 @@ public final class MainActivity extends Activity {
     private void applyMatch(Catalog.Movie movie,Runnable back,SmbMedia.Source origin,OnlineServices.Metadata candidate,String token){
         List<Catalog.Movie> targets=matchingTargets(movie);AlertDialog waiting=new MotionDialog(this).setMessage("正在保存匹配结果…").setCancelable(false).show();
         artwork.execute(()->{try{OnlineServices.Metadata result=OnlineServices.details(candidate,token);if(movie.title().series())store.put(origin.identity(),"@series:"+SeriesIndex.group(movie),result,true);for(Catalog.Movie target:targets)store.put(origin.identity(),target.metadataKey(),result,true);
-            postUi(()->{waiting.dismiss();if(isDestroyed()||source!=origin)return;if(movie.title().series())metadata.put("@series:"+SeriesIndex.group(movie),result);targets.forEach(m->metadata.put(m.metadataKey(),result));showDetails(movie,back);});
+            postUi(()->{waiting.dismiss();if(isDestroyed()||source!=origin)return;libraryRevision++;if(movie.title().series())metadata.put("@series:"+SeriesIndex.group(movie),result);targets.forEach(m->metadata.put(m.metadataKey(),result));showDetails(movie,back);});
         }catch(Exception e){postUi(()->{waiting.dismiss();if(!isDestroyed())new MotionDialog(this).setMessage("资料暂时无法保存，请稍后重试。").setPositiveButton("关闭",null).show();});}});
     }
     private void licenses(){
         String[] files={"THIRD-PARTY-NOTICES.txt","GPL-3.0.txt","Just-Player-Pro-COPYRIGHT.txt","Kinema-MIT.txt","NOVA-Apache-2.0.txt"};
-        new MotionDialog(this).setTitle("Shelf 0.4.3 · 开源许可").setItems(files,(d,w)->{try(var in=getAssets().open("licenses/"+files[w])){new MotionDialog(this).setTitle(files[w]).setMessage(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8)).setPositiveButton("关闭",null).show();}catch(Exception e){android.widget.Toast.makeText(this,"许可文本暂不可用",android.widget.Toast.LENGTH_SHORT).show();}}).show();
+        new MotionDialog(this).setTitle("Shelf 0.4.4 · 开源许可").setItems(files,(d,w)->{try(var in=getAssets().open("licenses/"+files[w])){new MotionDialog(this).setTitle(files[w]).setMessage(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8)).setPositiveButton("关闭",null).show();}catch(Exception e){android.widget.Toast.makeText(this,"许可文本暂不可用",android.widget.Toast.LENGTH_SHORT).show();}}).show();
     }
 
     private void search() {
@@ -393,7 +451,7 @@ public final class MainActivity extends Activity {
         panel.addView(button("在线匹配", this::showServices));
         panel.addView(button("连续播放下一集："+(saved.getBoolean("autoplay",false)?"开启":"关闭"),()->{saved.edit().putBoolean("autoplay",!saved.getBoolean("autoplay",false)).apply();showSettings();}));
         panel.addView(button("减少动态效果："+(saved.getBoolean("reduceMotion",false)?"开启":"关闭"),()->{saved.edit().putBoolean("reduceMotion",!saved.getBoolean("reduceMotion",false)).apply();showSettings();}));
-        panel.addView(button("开源许可与版本 0.4.3",this::licenses));
+        panel.addView(button("开源许可与版本 0.4.4",this::licenses));
         panel.addView(button("返回首页", this::showHome));
     }
 
@@ -435,6 +493,7 @@ public final class MainActivity extends Activity {
         view.details(movie, displayName(movie), match == null ? "" : match.facts()+"\n\n"+match.overview(),
                 resume > 0 ? "继续播放  " + formatTime(resume) : "播放",
                 () -> startMovie(movie), () -> {
+                    libraryRevision++;
                     saved.edit().putBoolean("favorite:" + key(movie), !favorite(movie)).apply();
                     showDetails(movie, back);
                 }, favorite(movie), () -> subtitleDialog(movie), ()->detailActions(movie,back), this::loadArt);
@@ -447,9 +506,18 @@ public final class MainActivity extends Activity {
 
     private OnlineServices.Metadata matched(Catalog.Movie movie){OnlineServices.Metadata exact=metadata.get(movie.metadataKey());return exact!=null?exact:movie.title().series()?metadata.get("@series:"+SeriesIndex.group(movie)):null;}
 
-    private String displayName(Catalog.Movie movie) {
+    private String seriesKey(Catalog.Movie movie) {
         OnlineServices.Metadata match = matched(movie);
-        String name = match != null && !match.name().isBlank() ? match.name() : movie.title().name();
+        if (match != null && "tv".equals(match.type()) && match.id() > 0) return "tmdb:" + match.id();
+        return normalizedSeriesNames.computeIfAbsent(movie.title().name(), TitleMatching::literal)
+                + "|" + movie.title().year();
+    }
+
+    private String displayName(Catalog.Movie movie) {
+        String custom = saved.getString("display:" + key(movie), "");
+        if (!custom.isBlank()) return custom;
+        OnlineServices.Metadata match = matched(movie);
+        String name = match != null && !match.name().isBlank() ? match.name() : Catalog.cleanDisplayName(movie.title().name());
         String disc = movie.discNumber();
         return disc.isEmpty() ? name : name + " · 碟 " + disc;
     }
@@ -477,14 +545,21 @@ public final class MainActivity extends Activity {
         String url = match == null ? null : (wide ? match.backdrop() : match.poster());
         if (local == null && url == null) return;
         String assetKey = current.identity() + "|" + (local != null ? local : url);
-        String cacheKey = assetKey + (wide ? "|wide" : "|poster");
+        int edge = Math.max(view.getWidth(), view.getHeight());
+        int decodeEdge = edge == 0 ? (wide ? 1280 : 384) : Math.max(320, Math.min(edge, 1280));
+        String cacheKey = assetKey + "|" + decodeEdge;
         Bitmap cached = images.get(cacheKey);
         if (cached != null) {
             applyArt(view, cached);
             return;
         }
         List<java.lang.ref.WeakReference<ImageView>> waiters = pendingArt.get(cacheKey);
-        if (waiters != null) { waiters.add(new java.lang.ref.WeakReference<>(view)); return; }
+        if (waiters != null) {
+            if (waiters.stream().noneMatch(reference -> reference.get() == view)) {
+                waiters.add(new java.lang.ref.WeakReference<>(view));
+            }
+            return;
+        }
         waiters = new ArrayList<>();
         waiters.add(new java.lang.ref.WeakReference<>(view));
         pendingArt.put(cacheKey, waiters);
@@ -498,10 +573,11 @@ public final class MainActivity extends Activity {
                 BitmapFactory.Options size = new BitmapFactory.Options();
                 size.inJustDecodeBounds = true;
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.length, size);
-                int max = wide ? 1280 : 500;
                 BitmapFactory.Options decode = new BitmapFactory.Options();
                 decode.inSampleSize = 1;
-                while (Math.max(size.outWidth, size.outHeight) / decode.inSampleSize > max * 2) decode.inSampleSize *= 2;
+                while (Math.max(size.outWidth, size.outHeight) / (decode.inSampleSize * 2) >= decodeEdge) {
+                    decode.inSampleSize *= 2;
+                }
                 Bitmap result = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, decode);
                 if (result == null) {
                     Log.w("ShelfPlayer", "Artwork bytes could not be decoded");
@@ -735,8 +811,8 @@ public final class MainActivity extends Activity {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
         playerView.setPlayer(player);
         hud = new PlaybackHud(this, playerView, player, displayName(movie), () -> subtitleDialog(movie),
-            SeriesIndex.adjacent(movies,movie,false)==null?null:()->stepEpisode(movie,false),
-            SeriesIndex.adjacent(movies,movie,true)==null?null:()->stepEpisode(movie,true));
+            SeriesIndex.adjacent(movies,movie,false,this::seriesKey)==null?null:()->stepEpisode(movie,false),
+            SeriesIndex.adjacent(movies,movie,true,MainActivity.this::seriesKey)==null?null:()->stepEpisode(movie,true));
         scenes.show(hud.root(),"playback:"+key(movie),5,true);
         hud.root().post(this::fullScreen);
 
@@ -774,7 +850,7 @@ public final class MainActivity extends Activity {
                 if(state==Player.STATE_READY&&player!=null&&player.getCurrentTracks().getGroups().stream().noneMatch(g->g.getType()==C.TRACK_TYPE_VIDEO))scenes.revealVideo();
                 if(state==Player.STATE_ENDED){
                     savePosition();
-                    if(saved.getBoolean("autoplay",false)&&SeriesIndex.adjacent(movies,movie,true)!=null)
+                    if(saved.getBoolean("autoplay",false)&&SeriesIndex.adjacent(movies,movie,true,MainActivity.this::seriesKey)!=null)
                         progressHandler.post(()->{if(player!=null&&player.getPlaybackState()==Player.STATE_ENDED&&selected==movie)stepEpisode(movie,true);});
                 }
             }
@@ -808,6 +884,7 @@ public final class MainActivity extends Activity {
         if(knownDuration>0)duration=knownDuration;
         else if(duration<=0)duration=saved.getLong("duration:"+playbackKey,0);
         long pos = player.getCurrentPosition();
+        libraryRevision++;
         boolean completed=player.getPlaybackState()==Player.STATE_ENDED||ResumePolicy.complete(pos,duration);
         if(completed){saved.edit().putBoolean("watched:"+playbackKey,true).apply();pos=0;}
         saved.edit().putLong(playbackKey, pos).putLong("recent:" + playbackKey, System.currentTimeMillis())
@@ -863,6 +940,7 @@ public final class MainActivity extends Activity {
         releasePlayer();
         scenes.close();
         network.shutdownNow();
+        metadataWorker.shutdownNow();
         artwork.shutdownNow();
         pendingArt.clear();
         images.evictAll();

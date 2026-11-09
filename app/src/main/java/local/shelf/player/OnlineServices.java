@@ -35,10 +35,15 @@ final class OnlineServices {
     }
     static Metadata movie(Catalog.Title title,String token) throws Exception {
         String category=title.series()?"tv":"movie";
-        JSONArray results=request(TMDB+"/search/"+category+"?language=zh-CN&include_adult=false&query="+Uri.encode(title.name())
-            +(title.year().isEmpty()?"":(title.series()?"&first_air_date_year=":"&year=")+title.year()),token,"",null).optJSONArray("results");
-        Metadata match=select(title,results);
-        return match==null?null:details(match,token);
+        for (String name : Catalog.lookupNames(title.name())) {
+            Catalog.Title query = new Catalog.Title(name, title.year(), title.season(), title.episode());
+            JSONArray results = request(TMDB+"/search/"+category+"?language=zh-CN&include_adult=false&query="+Uri.encode(name)
+                    +(title.year().isEmpty()?"":(title.series()?"&first_air_date_year=":"&year=")+title.year()),token,"",null)
+                    .optJSONArray("results");
+            Metadata match = select(query, results);
+            if (match != null) return details(match, token);
+        }
+        return null;
     }
     static Metadata select(Catalog.Title title,JSONArray results) throws Exception {
         String category=title.series()?"tv":"movie";
@@ -114,7 +119,7 @@ final class OnlineServices {
             connection.setConnectTimeout(7000);
             connection.setReadTimeout(10000);
             connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("User-Agent", "ShelfPlayer v0.4.3");
+            connection.setRequestProperty("User-Agent", "ShelfPlayer v0.4.4");
             if (!bearer.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + bearer);
             if (!key.isEmpty()) connection.setRequestProperty("Api-Key", key);
             if (body != null) {
