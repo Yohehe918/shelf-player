@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 @androidx.media3.common.util.UnstableApi
 final class SmbMedia {
@@ -37,7 +38,7 @@ final class SmbMedia {
     record Source(String host, int port, String share, String user, String domain, char[] password) {
         String identity() { return host + ":" + port + "/" + share; }
     }
-    record Entry(String name, boolean directory) {}
+    record Entry(String name, boolean directory, long size) {}
 
     static List<Entry> list(Source source, String path) throws IOException {
         try (Remote remote = new Remote(source)) {
@@ -50,29 +51,35 @@ final class SmbMedia {
 
     static List<Catalog.Movie> index(Source source) throws IOException {
         try (Remote remote = new Remote(source)) {
-            List<Catalog.Movie> movies = new ArrayList<>();
-            scan(remote.share, "", movies, 0);
-            return movies;
+            return index(path -> children(remote.share, path));
         }
+    }
+
+    static List<Catalog.Movie> index(Function<String, List<Entry>> directory) {
+        List<Catalog.Movie> movies = new ArrayList<>();
+        scan(directory, "", movies, 0);
+        return movies;
     }
 
     private static List<Entry> children(DiskShare share, String path) {
         return share.list(path).stream().map(info -> new Entry(info.getFileName(),
-                        (info.getFileAttributes() & FileAttributes.FILE_ATTRIBUTE_DIRECTORY.getValue()) != 0))
+                        (info.getFileAttributes() & FileAttributes.FILE_ATTRIBUTE_DIRECTORY.getValue()) != 0, info.getEndOfFile()))
                 .filter(entry -> !entry.name.startsWith("."))
                 .collect(java.util.stream.Collectors.toList());
     }
 
-    private static void scan(DiskShare share, String path, List<Catalog.Movie> movies, int depth) {
+    private static void scan(Function<String, List<Entry>> directory, String path, List<Catalog.Movie> movies, int depth) {
         if (depth > 32) return;
-        List<Entry> entries = children(share, path);
+        List<Entry> entries = directory.apply(path);
         List<String> names = entries.stream().filter(entry -> !entry.directory).map(Entry::name)
                 .collect(java.util.stream.Collectors.toList());
         for (Entry entry : entries) {
             String child = join(path, entry.name);
             if (entry.directory) {
                 try {
-                    scan(share, child, movies, depth + 1);
+                    if (!entry.name.equalsIgnoreCase("BDMV") || !scanDisc(directory, path, child, names, movies)) {
+                        scan(directory, child, movies, depth + 1);
+                    }
                 } catch (com.hierynomus.mssmb2.SMBApiException error) {
                     if (error.getStatus() != com.hierynomus.mserref.NtStatus.STATUS_ACCESS_DENIED) throw error;
                 }
@@ -80,17 +87,45 @@ final class SmbMedia {
                 String stem = Catalog.basename(entry.name);
                 String poster = artwork(names, path, stem, stem + "-poster", "poster", "folder");
                 String backdrop = artwork(names, path, stem + "-fanart", stem + "-backdrop", "fanart", "backdrop");
-                List<String> subs = names.stream().filter(name -> {
-                    int dot = name.lastIndexOf('.');
-                    if (dot < stem.length() || !SUBTITLES.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT))) return false;
-                    String base = name.substring(0, dot);
-                    return base.equalsIgnoreCase(stem) || (base.length() > stem.length()
-                            && base.regionMatches(true, 0, stem, 0, stem.length())
-                            && ".-_".indexOf(base.charAt(stem.length())) >= 0);
-                }).map(name -> join(path, name)).sorted().collect(java.util.stream.Collectors.toList());
-                movies.add(new Catalog.Movie(child, Catalog.titleInPath(child), poster, backdrop, subs));
+                movies.add(new Catalog.Movie(child, Catalog.titleInPath(child), poster, backdrop,
+                        subtitles(names, path, stem)));
             }
         }
+    }
+
+    private static boolean scanDisc(Function<String, List<Entry>> directory, String folder,
+                                    String bdmv, List<String> names, List<Catalog.Movie> movies) {
+        Entry stream = directory.apply(bdmv).stream()
+                .filter(entry -> entry.directory && entry.name.equalsIgnoreCase("STREAM"))
+                .findFirst().orElse(null);
+        if (stream == null) return false;
+        String streamPath = join(bdmv, stream.name);
+        List<Entry> clips = directory.apply(streamPath);
+        Entry main = clips.stream()
+                .filter(clip -> !clip.directory && clip.size > 0
+                        && clip.name.toLowerCase(Locale.ROOT).endsWith(".m2ts"))
+                .min(Comparator.comparingLong(Entry::size).reversed().thenComparing(Entry::name))
+                .orElse(null);
+        if (main == null) return true;
+
+        String stem = folder.substring(folder.lastIndexOf('\\') + 1);
+        String poster = artwork(names, folder, stem + "-poster", "poster", "folder", stem);
+        String backdrop = artwork(names, folder, stem + "-fanart", stem + "-backdrop", "fanart", "backdrop");
+        List<String> streamFiles = clips.stream().filter(clip -> !clip.directory).map(Entry::name).toList();
+        movies.add(new Catalog.Movie(join(streamPath, main.name), Catalog.discTitle(folder), poster, backdrop,
+                subtitles(streamFiles, streamPath, Catalog.basename(main.name)), folder));
+        return true;
+    }
+
+    private static List<String> subtitles(List<String> names, String path, String stem) {
+        return names.stream().filter(name -> {
+            int dot = name.lastIndexOf('.');
+            if (dot < stem.length() || !SUBTITLES.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT))) return false;
+            String base = name.substring(0, dot);
+            return base.equalsIgnoreCase(stem) || (base.length() > stem.length()
+                    && base.regionMatches(true, 0, stem, 0, stem.length())
+                    && ".-_".indexOf(base.charAt(stem.length())) >= 0);
+        }).map(name -> join(path, name)).sorted().toList();
     }
 
     private static String artwork(List<String> names, String path, String... candidates) {

@@ -15,6 +15,14 @@ public final class ShelfInstrumentation extends Instrumentation {
             var movie=new Catalog.Movie("中文\\S01E02.mkv",title,"中文\\poster.jpg",null,List.of("中文\\S01E02.zh.srt"));
             store.saveLibrary("one",List.of(movie));require(store.library("one").equals(List.of(movie)),"Library and subtitles round trip");
             require(store.library("two").isEmpty(),"Source isolation");
+            String oldClip = "Film (2021)\\BDMV\\STREAM\\00001.m2ts";
+            var legacy = new Catalog.Movie(oldClip, Catalog.titleInPath(oldClip), null, null, List.of());
+            var disc = new Catalog.Movie(oldClip, Catalog.discTitle("Film (2021)"), null, null,
+                    List.of(), "Film (2021)");
+            store.saveLibrary("disc", List.of(legacy, movie));
+            require(store.library("disc").equals(List.of(movie)), "Legacy disc segment should not appear");
+            store.saveLibrary("disc", List.of(disc, movie));
+            require(store.library("disc").contains(disc), "Grouped disc did not survive cache round trip");
             try{store.saveLibrary("one",Arrays.asList(movie,null));throw new AssertionError("Expected failed transaction");}catch(NullPointerException expected){}
             require(store.library("one").size()==1,"Failed scan must not wipe library");
             var automatic=new OnlineServices.Metadata("自动","简介",null,null,10,"tv","2026",8.2,"剧情",45);
@@ -32,7 +40,7 @@ public final class ShelfInstrumentation extends Instrumentation {
             var atmos=new androidx.media3.common.Format.Builder().setSampleMimeType(androidx.media3.common.MimeTypes.AUDIO_E_AC3_JOC).build();
             require("E-AC-3 Atmos".equals(TrackNames.codec(atmos)),"Media3 format integration");
             if(getTargetContext().getPackageName().endsWith(".qa"))getTargetContext().getSharedPreferences("shelf",0).edit().putString("address","127.0.0.1:1446").putString("share","QA").putString("user","").commit();
-            result.putString("stream",(motionChecks?"PASS: 11 motion/navigation checks and artwork coalescing, variant isolation, completion cleanup.\n":"")+"PASS: 12 device checks; SQLite transactions, restart, source isolation, manual-match protection, URI and Media3.\n");finish(Activity.RESULT_OK,result);
+            result.putString("stream",(motionChecks?"PASS: 11 motion/navigation checks and artwork coalescing, variant isolation, completion cleanup.\n":"")+"PASS: 14 device checks; SQLite transactions, restart, source isolation, manual-match protection, URI and Media3.\n");finish(Activity.RESULT_OK,result);
         }catch(Throwable e){result.putString("stream","FAIL: "+e+"\n");finish(Activity.RESULT_CANCELED,result);}
         finally{store.close();getTargetContext().deleteDatabase(db);}
     }

@@ -7,7 +7,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.animation.PathInterpolator;
 import android.widget.TextView;
 import androidx.dynamicanimation.animation.FloatValueHolder;
 import androidx.dynamicanimation.animation.SpringAnimation;
@@ -15,7 +14,6 @@ import androidx.dynamicanimation.animation.SpringForce;
 
 /** Shelf motion language: continuous focus springs, restrained travel and interruptible feedback. */
 final class Motion {
-    static final PathInterpolator EASE = new PathInterpolator(.2f, .8f, .2f, 1f);
     private Motion() {}
 
     static boolean enabled(Context context) {

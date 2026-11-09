@@ -9,6 +9,10 @@ import java.util.regex.Pattern;
 final class Catalog {
     private static final Pattern FOLDER_EPISODE = Pattern.compile("(?i)^(?:e|ep|episode|第)\\s*(\\d{1,3})(?:集)?(?:\\b|[._ -]).*");
     private static final Pattern FOLDER_SEASON = Pattern.compile("(?i)^(?:season|s|第)\\s*(\\d{1,3})(?:季)?$");
+    private static final Pattern BLURAY_STREAM = Pattern.compile("(?i)(?:^|\\\\)BDMV\\\\STREAM\\\\[^\\\\]+$");
+    private static final Pattern DISC_NUMBER =
+            Pattern.compile("(?i)(?:^|[ ._-])(?:disc|disk|cd|bd|d)[ ._-]*([0-9]+)$");
+    private static final Pattern SEASON_PACK = Pattern.compile("(?i)^(.+?)[ ._-]+S([0-9]{1,2})(?:[ ._-]|$)");
     private static final Pattern YEAR = Pattern.compile("(?<!\\d)((?:19|20)\\d{2})(?!\\d)");
     private static final Pattern RELEASE = Pattern.compile(
             "(?i)[. _-]+(?:2160p|1080p|720p|4k|uhd|bluray|blu-ray|webrip|web-dl|hdtv|remux|hdr10|hevc|x264|x265)(?:[. _-]|$)");
@@ -20,8 +24,62 @@ final class Catalog {
         }
     }
 
-    record Movie(String path, Title title, String poster, String backdrop, List<String> subtitles) {
+    record Movie(String path, Title title, String poster, String backdrop, List<String> subtitles, String discFolder) {
+        Movie(String path, Title title, String poster, String backdrop, List<String> subtitles) {
+            this(path, title, poster, backdrop, subtitles, null);
+        }
+        boolean bluRay() { return discFolder != null; }
+        String metadataKey() { return bluRay() ? "@bluray:" + discFolder : path; }
+        Title metadataTitle() {
+            Title show = bluRay() && !title.series() ? discSeries(discFolder) : null;
+            return show == null ? title : show;
+        }
+        String discNumber() {
+            if (!bluRay()) return "";
+            Matcher disc = DISC_NUMBER.matcher(lastComponent(discFolder));
+            return disc.find() ? disc.group(1) : "";
+        }
         String filename() { return path.substring(path.lastIndexOf('\\') + 1); }
+    }
+
+    static String bluRayFolder(String path) {
+        Matcher stream = BLURAY_STREAM.matcher(path);
+        return stream.find() ? path.substring(0, stream.start()) : null;
+    }
+
+    static Title discTitle(String folder) {
+        if (folder.isEmpty()) return new Title("蓝光原盘", "", 0, 0);
+        String name = lastComponent(folder);
+        Title show = discSeries(folder);
+        if (show != null) {
+            Matcher episode = FOLDER_EPISODE.matcher(name + " ");
+            int number = episode.matches() ? Integer.parseInt(episode.group(1)) : 0;
+            return new Title(show.name(), show.year(), show.season(), number);
+        }
+        int separator = folder.lastIndexOf('\\');
+        if (separator >= 0 && DISC_NUMBER.matcher(name).matches()) {
+            name = lastComponent(folder.substring(0, separator));
+        }
+        Title parsed = title(name + ".m2ts");
+        return new Title(parsed.name(), parsed.year(), 0, 0);
+    }
+
+    // A season disc can use TV metadata without claiming that its playable clip is a specific episode.
+    private static Title discSeries(String folder) {
+        int separator = folder.lastIndexOf('\\');
+        if (separator < 0) return null;
+        String child = lastComponent(folder);
+        if (!DISC_NUMBER.matcher(child).find() && !FOLDER_EPISODE.matcher(child + " ").matches()) {
+            return null;
+        }
+        Matcher season = SEASON_PACK.matcher(lastComponent(folder.substring(0, separator)));
+        if (!season.find()) return null;
+        Title show = title(season.group(1) + ".m2ts");
+        return new Title(show.name(), show.year(), Integer.parseInt(season.group(2)), 1);
+    }
+
+    private static String lastComponent(String path) {
+        return path.substring(path.lastIndexOf('\\') + 1);
     }
 
     static String basename(String name) {

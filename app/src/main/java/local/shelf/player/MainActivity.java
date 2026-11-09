@@ -229,7 +229,10 @@ public final class MainActivity extends Activity {
                     if (connected != null) connected.run();
                     if(player==null&&(page.equals("home")||page.equals("connect")))showHome();
                 });
-                if (!tmdb.isEmpty()) fetchMetadata(next, indexed, tmdb);
+                if (!tmdb.isEmpty()) {
+                    fetchMetadata(next, indexed.stream().filter(Catalog.Movie::bluRay).toList(), tmdb);
+                    fetchMetadata(next, indexed.stream().filter(movie -> !movie.bluRay()).toList(), tmdb);
+                }
             } catch (Exception error) {
                 Log.w("ShelfPlayer", "SMB indexing failed: " + error.getClass().getSimpleName());
                 postUi(() -> {
@@ -244,16 +247,19 @@ public final class MainActivity extends Activity {
     }
 
     private void fetchMetadata(SmbMedia.Source current, List<Catalog.Movie> indexed, String token) {
+        if (indexed.isEmpty()) return;
         Map<String,OnlineServices.Metadata> existing=store.metadata(current.identity());
         Map<String,OnlineServices.Metadata> found=new HashMap<>(),lookups=new HashMap<>();
         for(Catalog.Movie movie:indexed){
             if(Thread.currentThread().isInterrupted())return;
-            if(existing.containsKey(movie.path()))continue;
+            if(existing.containsKey(movie.metadataKey()))continue;
             try{
-                String lookup=(movie.title().series()?"tv:":"movie:")+SeriesIndex.group(movie);
-                if(!lookups.containsKey(lookup)&&!(movie.title().series()&&existing.containsKey("@series:"+SeriesIndex.group(movie))))lookups.put(lookup,OnlineServices.movie(movie.title(),token));
+                Catalog.Title lookupTitle=movie.metadataTitle();
+                String lookup=(lookupTitle.series()?"tv:":"movie:")
+                        +TitleMatching.literal(lookupTitle.name())+"|"+lookupTitle.year();
+                if(!lookups.containsKey(lookup)&&!(movie.title().series()&&existing.containsKey("@series:"+SeriesIndex.group(movie))))lookups.put(lookup,OnlineServices.movie(lookupTitle,token));
                 OnlineServices.Metadata result=movie.title().series()&&existing.containsKey("@series:"+SeriesIndex.group(movie))?existing.get("@series:"+SeriesIndex.group(movie)):lookups.get(lookup);
-                if(result!=null){store.put(current.identity(),movie.path(),result,false);found.put(movie.path(),result);}
+                if(result!=null){store.put(current.identity(),movie.metadataKey(),result,false);found.put(movie.metadataKey(),result);}
             }catch(Exception error){Log.w("ShelfPlayer","TMDB request failed: "+error.getClass().getSimpleName());break;}
         }
         postUi(()->{if(isDestroyed()||current!=source)return;found.forEach(metadata::putIfAbsent);if(page.equals("home")&&!found.isEmpty())showHome();});
@@ -339,17 +345,17 @@ public final class MainActivity extends Activity {
             if(which==0){saved.edit().putLong(key(movie),0).apply();startMovie(movie);}
             else if(which==1){saved.edit().putBoolean("watched:"+key(movie),!watched(movie)).putLong(key(movie),0).apply();showDetails(movie,back);}
             else if(which==2)correctMatch(movie,back);
-            else{List<Catalog.Movie> targets=matchingTargets(movie);SmbMedia.Source origin=source;String id=origin.identity();targets.forEach(m->metadata.remove(m.path()));if(movie.title().series())metadata.remove("@series:"+SeriesIndex.group(movie));network.execute(()->{List<String> resetPaths=new ArrayList<>(targets.stream().map(Catalog.Movie::path).toList());if(movie.title().series())resetPaths.add("@series:"+SeriesIndex.group(movie));store.forget(id,resetPaths);String token=secrets.read("tmdb");if(!token.isEmpty())fetchMetadata(origin,targets,token);});showDetails(movie,back);}
+            else{List<Catalog.Movie> targets=matchingTargets(movie);SmbMedia.Source origin=source;String id=origin.identity();targets.forEach(m->metadata.remove(m.metadataKey()));if(movie.title().series())metadata.remove("@series:"+SeriesIndex.group(movie));network.execute(()->{List<String> resetPaths=new ArrayList<>(targets.stream().map(Catalog.Movie::metadataKey).toList());if(movie.title().series())resetPaths.add("@series:"+SeriesIndex.group(movie));store.forget(id,resetPaths);String token=secrets.read("tmdb");if(!token.isEmpty())fetchMetadata(origin,targets,token);});showDetails(movie,back);}
         }).show();
     }
     private List<Catalog.Movie> matchingTargets(Catalog.Movie movie){return movie.title().series()?SeriesIndex.episodes(movies,movie):List.of(movie);}
     private void correctMatch(Catalog.Movie movie,Runnable back){
         String token=secrets.read("tmdb");if(token.isEmpty()){new MotionDialog(this).setMessage("请先在在线匹配设置中填写自己的 TMDB Token。").setPositiveButton("设置",(d,w)->showServices()).setNegativeButton("取消",null).show();return;}
-        EditText query=new EditText(this);query.setSingleLine();query.setText(movie.title().name());
+        EditText query=new EditText(this);query.setSingleLine();query.setText(movie.metadataTitle().name());
         new MotionDialog(this).setTitle(movie.title().series()?"修正整部剧的匹配":"修正电影匹配").setView(query).setPositiveButton("搜索",(d,w)->{
             SmbMedia.Source origin=source;String text=query.getText().toString().trim();if(text.isEmpty())return;
             AlertDialog waiting=new MotionDialog(this).setMessage("正在搜索影片资料…").setNegativeButton("取消",null).show();
-            artwork.execute(()->{try{List<OnlineServices.Metadata> found=OnlineServices.search(text,movie.title().series(),token);postUi(()->{
+            artwork.execute(()->{try{List<OnlineServices.Metadata> found=OnlineServices.search(text,movie.metadataTitle().series(),token);postUi(()->{
                 if(isDestroyed()||source!=origin||!waiting.isShowing())return;waiting.dismiss();
                 if(found.isEmpty()){new MotionDialog(this).setMessage("没有找到结果，请换一个片名。").setPositiveButton("关闭",null).show();return;}
                 new MotionDialog(this).setTitle("选择正确的影片").setItems(found.stream().map(m->m.name()+" · "+m.year()+" · TMDB "+m.id()).toArray(String[]::new),(choice,i)->applyMatch(movie,back,origin,found.get(i),token)).show();
@@ -358,13 +364,13 @@ public final class MainActivity extends Activity {
     }
     private void applyMatch(Catalog.Movie movie,Runnable back,SmbMedia.Source origin,OnlineServices.Metadata candidate,String token){
         List<Catalog.Movie> targets=matchingTargets(movie);AlertDialog waiting=new MotionDialog(this).setMessage("正在保存匹配结果…").setCancelable(false).show();
-        artwork.execute(()->{try{OnlineServices.Metadata result=OnlineServices.details(candidate,token);if(movie.title().series())store.put(origin.identity(),"@series:"+SeriesIndex.group(movie),result,true);for(Catalog.Movie target:targets)store.put(origin.identity(),target.path(),result,true);
-            postUi(()->{waiting.dismiss();if(isDestroyed()||source!=origin)return;if(movie.title().series())metadata.put("@series:"+SeriesIndex.group(movie),result);targets.forEach(m->metadata.put(m.path(),result));showDetails(movie,back);});
+        artwork.execute(()->{try{OnlineServices.Metadata result=OnlineServices.details(candidate,token);if(movie.title().series())store.put(origin.identity(),"@series:"+SeriesIndex.group(movie),result,true);for(Catalog.Movie target:targets)store.put(origin.identity(),target.metadataKey(),result,true);
+            postUi(()->{waiting.dismiss();if(isDestroyed()||source!=origin)return;if(movie.title().series())metadata.put("@series:"+SeriesIndex.group(movie),result);targets.forEach(m->metadata.put(m.metadataKey(),result));showDetails(movie,back);});
         }catch(Exception e){postUi(()->{waiting.dismiss();if(!isDestroyed())new MotionDialog(this).setMessage("资料暂时无法保存，请稍后重试。").setPositiveButton("关闭",null).show();});}});
     }
     private void licenses(){
         String[] files={"THIRD-PARTY-NOTICES.txt","GPL-3.0.txt","Just-Player-Pro-COPYRIGHT.txt","Kinema-MIT.txt","NOVA-Apache-2.0.txt"};
-        new MotionDialog(this).setTitle("Shelf 0.4.2 · 开源许可").setItems(files,(d,w)->{try(var in=getAssets().open("licenses/"+files[w])){new MotionDialog(this).setTitle(files[w]).setMessage(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8)).setPositiveButton("关闭",null).show();}catch(Exception e){android.widget.Toast.makeText(this,"许可文本暂不可用",android.widget.Toast.LENGTH_SHORT).show();}}).show();
+        new MotionDialog(this).setTitle("Shelf 0.4.3 · 开源许可").setItems(files,(d,w)->{try(var in=getAssets().open("licenses/"+files[w])){new MotionDialog(this).setTitle(files[w]).setMessage(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8)).setPositiveButton("关闭",null).show();}catch(Exception e){android.widget.Toast.makeText(this,"许可文本暂不可用",android.widget.Toast.LENGTH_SHORT).show();}}).show();
     }
 
     private void search() {
@@ -375,6 +381,7 @@ public final class MainActivity extends Activity {
                 .setPositiveButton("搜索", (dialog, which) -> {
                     String query = field.getText().toString().trim().toLowerCase(Locale.ROOT);
                     grid("搜索结果", movie -> displayName(movie).toLowerCase(Locale.ROOT).contains(query)
+                            || movie.title().name().toLowerCase(Locale.ROOT).contains(query)
                             || movie.filename().toLowerCase(Locale.ROOT).contains(query), 0);
                 }).setNegativeButton("取消", null).show();
     }
@@ -386,7 +393,7 @@ public final class MainActivity extends Activity {
         panel.addView(button("在线匹配", this::showServices));
         panel.addView(button("连续播放下一集："+(saved.getBoolean("autoplay",false)?"开启":"关闭"),()->{saved.edit().putBoolean("autoplay",!saved.getBoolean("autoplay",false)).apply();showSettings();}));
         panel.addView(button("减少动态效果："+(saved.getBoolean("reduceMotion",false)?"开启":"关闭"),()->{saved.edit().putBoolean("reduceMotion",!saved.getBoolean("reduceMotion",false)).apply();showSettings();}));
-        panel.addView(button("开源许可与版本 0.4.2",this::licenses));
+        panel.addView(button("开源许可与版本 0.4.3",this::licenses));
         panel.addView(button("返回首页", this::showHome));
     }
 
@@ -438,11 +445,13 @@ public final class MainActivity extends Activity {
         return source.identity() + "/" + movie.path();
     }
 
-    private OnlineServices.Metadata matched(Catalog.Movie movie){OnlineServices.Metadata exact=metadata.get(movie.path());return exact!=null?exact:movie.title().series()?metadata.get("@series:"+SeriesIndex.group(movie)):null;}
+    private OnlineServices.Metadata matched(Catalog.Movie movie){OnlineServices.Metadata exact=metadata.get(movie.metadataKey());return exact!=null?exact:movie.title().series()?metadata.get("@series:"+SeriesIndex.group(movie)):null;}
 
     private String displayName(Catalog.Movie movie) {
         OnlineServices.Metadata match = matched(movie);
-        return match != null && !match.name().isBlank() ? match.name() : movie.title().name();
+        String name = match != null && !match.name().isBlank() ? match.name() : movie.title().name();
+        String disc = movie.discNumber();
+        return disc.isEmpty() ? name : name + " · 碟 " + disc;
     }
 
     private boolean favorite(Catalog.Movie movie) {
@@ -518,9 +527,7 @@ public final class MainActivity extends Activity {
     }
 
     private void applyArt(ImageView view, Bitmap bitmap) {
-        boolean reveal=view.getDrawable()==null&&view.isAttachedToWindow()&&Motion.enabled(this);
         view.setImageBitmap(bitmap);
-        if(reveal){view.setAlpha(0);view.animate().alpha(1).setDuration(220).setInterpolator(Motion.EASE).start();}
         if (view.getTag() instanceof View label) label.setVisibility(View.GONE);
     }
 

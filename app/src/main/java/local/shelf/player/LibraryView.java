@@ -215,11 +215,11 @@ final class LibraryView {
         name.setMaxLines(2);
         name.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
         info.addView(name);
-        TextView badges = label((movie.title().caption() + "     " + movie.filename().substring(
-                movie.filename().lastIndexOf('.') + 1).toUpperCase(java.util.Locale.ROOT)).trim(), 16, WHITE);
+        TextView badges = label((movie.title().caption() + "     " + (movie.bluRay() ? "蓝光原盘" : movie.filename().substring(
+                movie.filename().lastIndexOf('.') + 1).toUpperCase(java.util.Locale.ROOT))).trim(), 16, WHITE);
         badges.setPadding(0, dp(13), 0, dp(14));
         info.addView(badges);
-        TextView summary = label(overview.isEmpty() ? movie.filename() : overview, 16, WHITE);
+        TextView summary = label(overview.isEmpty() ? (movie.bluRay() ? "蓝光原盘 · 播放最大的影片分段" : movie.filename()) : overview, 16, WHITE);
         summary.setMaxLines(4);
         summary.setEllipsize(android.text.TextUtils.TruncateAt.END);
         info.addView(summary);

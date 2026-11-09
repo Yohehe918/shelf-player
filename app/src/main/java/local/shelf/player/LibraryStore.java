@@ -21,13 +21,18 @@ final class LibraryStore extends SQLiteOpenHelper {
     synchronized void saveLibrary(String source,List<Catalog.Movie> movies) throws JSONException {
         if(closed)return;SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{
             db.delete("library","source=?",new String[]{source});
-            for(Catalog.Movie m:movies){JSONObject o=new JSONObject().put("name",m.title().name()).put("year",m.title().year()).put("season",m.title().season()).put("episode",m.title().episode()).put("poster",m.poster()).put("backdrop",m.backdrop()).put("subtitles",new JSONArray(m.subtitles()));
+            for(Catalog.Movie m:movies){JSONObject o=new JSONObject().put("name",m.title().name()).put("year",m.title().year()).put("season",m.title().season()).put("episode",m.title().episode()).put("poster",m.poster()).put("backdrop",m.backdrop()).put("subtitles",new JSONArray(m.subtitles())).put("discFolder",m.discFolder());
                 ContentValues v=new ContentValues();v.put("source",source);v.put("path",m.path());v.put("data",o.toString());db.insertOrThrow("library",null,v);}
             db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     synchronized List<Catalog.Movie> library(String source){if(closed)return List.of();List<Catalog.Movie> out=new ArrayList<>();try(Cursor c=getReadableDatabase().query("library",new String[]{"path","data"},"source=?",new String[]{source},null,null,"path")){
-        while(c.moveToNext())try{JSONObject o=new JSONObject(c.getString(1));List<String> subs=new ArrayList<>();JSONArray a=o.optJSONArray("subtitles");if(a!=null)for(int i=0;i<a.length();i++)subs.add(a.getString(i));out.add(new Catalog.Movie(c.getString(0),new Catalog.Title(o.getString("name"),o.optString("year"),o.optInt("season"),o.optInt("episode")),o.isNull("poster")?null:o.getString("poster"),o.isNull("backdrop")?null:o.getString("backdrop"),subs));}catch(JSONException ignored){}
+        while(c.moveToNext())try{JSONObject o=new JSONObject(c.getString(1));
+            String path=c.getString(0);
+            String discFolder=o.isNull("discFolder")?null:o.getString("discFolder");
+            // Pre-disc caches contain individual clips. The next scan replaces them atomically.
+            if(discFolder==null&&Catalog.bluRayFolder(path)!=null)continue;
+            List<String> subs=new ArrayList<>();JSONArray a=o.optJSONArray("subtitles");if(a!=null)for(int i=0;i<a.length();i++)subs.add(a.getString(i));out.add(new Catalog.Movie(path,new Catalog.Title(o.getString("name"),o.optString("year"),o.optInt("season"),o.optInt("episode")),o.isNull("poster")?null:o.getString("poster"),o.isNull("backdrop")?null:o.getString("backdrop"),subs,discFolder));}catch(JSONException ignored){}
     }return out;}
     synchronized Map<String,OnlineServices.Metadata> metadata(String source){if(closed)return Map.of();Map<String,OnlineServices.Metadata> out=new HashMap<>();try(Cursor c=getReadableDatabase().query("metadata",new String[]{"path","data"},"source=?",new String[]{source},null,null,null)){
         while(c.moveToNext())try{out.put(c.getString(0),OnlineServices.Metadata.fromJson(new JSONObject(c.getString(1))));}catch(JSONException ignored){}
